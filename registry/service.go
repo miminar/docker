@@ -166,10 +166,14 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 	}
 	for _, result := range results.Results {
 		out := &engine.Env{}
-		indexName, remoteName := splitReposName(result.Name, false)
-		if indexName == "" {
-			indexName = repoInfo.Index.Name
+		// Check if search result has is fully qualified with registry
+		// If not, assume REGISTRY = INDEX
+		registryName, remoteName := splitReposName(result.Name, false)
+		if registryName == "" {
+			remoteName = repoInfo.Index.Name + "/" + remoteName
 		}
+		// Now prepend 'INDEX: ' to the result to identify in which INDEX the result was found.
+		indexName := repoInfo.Index.Name
 		if host, _, err := net.SplitHostPort(indexName); err == nil {
 			indexName = host
 		}
