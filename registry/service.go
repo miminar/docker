@@ -168,9 +168,8 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 		out := &engine.Env{}
 		// Check if search result has is fully qualified with registry
 		// If not, assume REGISTRY = INDEX
-		registryName, remoteName := splitReposName(result.Name, false)
-		if registryName == "" {
-			remoteName = repoInfo.Index.Name + "/" + remoteName
+		if ! RepositoryNameHasIndex(result.Name) {		
+			result.Name = repoInfo.Index.Name + "/" + result.Name
 		}
 		// Now prepend 'INDEX: ' to the result to identify in which INDEX the result was found.
 		indexName := repoInfo.Index.Name
@@ -186,7 +185,7 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 			}
 		}
 		if indexName != "" {
-			result.Name = indexName + ": " + remoteName
+			result.Name = indexName + ": " + result.Name
 		}
 		out.Import(result)
 		outs.Add(out)
