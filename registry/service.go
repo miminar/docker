@@ -2,7 +2,6 @@ package registry
 
 import (
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 
@@ -144,6 +143,8 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 	var (
 		metaHeaders = map[string][]string{}
 		authConfig  = &AuthConfig{}
+		registryName string
+		resultName string
 	)
 	job.GetenvJson("authConfig", authConfig)
 	job.GetenvJson("metaHeaders", metaHeaders)
@@ -168,26 +169,16 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 		out := &engine.Env{}
 		// Check if search result has is fully qualified with registry
 		// If not, assume REGISTRY = INDEX
-		if ! RepositoryNameHasIndex(result.Name) {		
-			result.Name = repoInfo.Index.Name + "/" + result.Name
-		}
-		// Now prepend 'INDEX: ' to the result to identify in which INDEX the result was found.
-		indexName := repoInfo.Index.Name
-		if host, _, err := net.SplitHostPort(indexName); err == nil {
-			indexName = host
-		}
-		// do not shorten ip address
-		if net.ParseIP(indexName) == nil {
-			// shorten index name just to the last 2 components (`DOMAIN.TLD`)
-			indexNameSubStrings := strings.Split(indexName, ".")
-			if len(indexNameSubStrings) > 2 {
-				indexName = strings.Join(indexNameSubStrings[len(indexNameSubStrings)-2:], ".")
-			}
-		}
-		if indexName != "" {
-			result.Name = indexName + ": " + result.Name
+		if RepositoryNameHasIndex(result.Name) {		
+			registryName, resultName = splitReposName(result.Name, false)
+			result.Name = resultName
+		} else {
+			registryName = repoInfo.Index.Name
 		}
 		out.Import(result)
+		// Now add the index in which we found the result to the json. (not sure this is really the right place for this)
+		out.Set("registryName",registryName)
+		out.Set("indexName",repoInfo.Index.Name)
 		outs.Add(out)
 	}
 	return nil
