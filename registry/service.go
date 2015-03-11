@@ -3,7 +3,6 @@ package registry
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/engine"
@@ -84,57 +83,57 @@ func (s *Service) Auth(job *engine.Job) engine.Status {
 	return engine.StatusOK
 }
 
-// Compare two registries taking into consideration just their index names.
-func cmpRepoNamesByIndexName(fst, snd string) int {
-	ia := strings.Index(fst, "/")
-	ib := strings.Index(snd, "/")
-	if ia >= 0 && ib >= 0 {
-		switch {
-		case fst[:ia] < snd[:ib]:
-			return -1
-		case fst[:ia] > snd[:ib]:
-			return 1
-		}
-	}
-	switch {
-	case ia < ib:
-		return -1
-	case ia > ib:
-		return 1
-	}
-	return 0
-}
 
 // Compare two items in the result table of search command.
 // First compare the index name name. Second compare their rating. Then compare their name.
 func cmpSearchResults(fst, snd *engine.Env) int {
-	nameA := fst.Get("name")
-	nameB := snd.Get("name")
-	ret := cmpRepoNamesByIndexName(nameA, nameB)
-	if ret != 0 {
-		return ret
-	}
-	starsA := fst.Get("star_count")
-	starsB := snd.Get("star_count")
-	intA, errA := strconv.ParseInt(starsA, 10, 64)
-	intB, errB := strconv.ParseInt(starsB, 10, 64)
-	if errA == nil && errB == nil {
-		switch {
-		case intA > intB:
+	// First compare registries. If they are different, we know it's different repositories
+	regA := fst.Get("registry_name")
+	regB := snd.Get("registry_name")
+	switch {
+		case regA < regB:
 			return -1
-		case intA < intB:
+		case regA > regB:
 			return 1
+	}
+
+	// If the indices in which we found the image differ, but the fully qualified names are identical, 
+        // we don't compare stars, because they might be out of sync leading to dupes (e.g. in the case RH listing ISV content).
+	// BTW: Does comparing stars make any sense whatshowever? How can that even be different for identical names?
+
+	indA  := fst.Get("index_name")
+	indB  := snd.Get("index_name")
+
+	if indA == indB {
+		starsA := fst.Get("star_count")
+		starsB := snd.Get("star_count")
+
+		intA, errA := strconv.ParseInt(starsA, 10, 64)
+		intB, errB := strconv.ParseInt(starsB, 10, 64)
+		if errA == nil && errB == nil {
+			switch {
+			case intA > intB:
+				return -1
+			case intA < intB:
+				return 1
+			}
+		}
+		switch {
+			case starsA > starsB:
+				return -1
+			case starsA < starsB:
+				return 1
 		}
 	}
+
+	// Now comparing the names - this is what really matters.
+	nameA := fst.Get("name")
+	nameB := snd.Get("name")
 	switch {
-	case starsA > starsB:
-		return -1
-	case starsA < starsB:
-		return 1
-	case nameA < nameB:
-		return -1
-	case nameA > nameB:
-		return 1
+		case nameA < nameB:
+			return -1
+		case nameA > nameB:
+			return 1
 	}
 	return 0
 }
