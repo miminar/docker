@@ -129,6 +129,11 @@ Create a container
              ],
              "Entrypoint": "",
              "Image": "ubuntu",
+             "Labels": {
+                     "Vendor": "Acme",
+                     "License": "GPL",
+                     "Version": "1.0"
+             },
              "Volumes": {
                      "/tmp": {}
              },
@@ -523,8 +528,6 @@ Status Codes:
 `GET /containers/(id)/stats`
 
 This endpoint returns a live stream of a container's resource usage statistics.
-
-> **Note**: this functionality currently only works when using the *libcontainer* exec-driver.
 
 **Example request**:
 
@@ -1171,6 +1174,7 @@ Return low-level information on the image `name`
                              "Cmd": ["/bin/bash"],
                              "Dns": null,
                              "Image": "ubuntu",
+                             "Labels": null,
                              "Volumes": null,
                              "VolumesFrom": "",
                              "WorkingDir": ""
@@ -1970,7 +1974,7 @@ This might change in the future.
 
 ## 3.3 CORS Requests
 
-To enable cross origin requests to the remote api add the flag
-"--api-enable-cors" when running docker in daemon mode.
+To set cross origin requests to the remote api, please add flag "--api-enable-cors"
+when running docker in daemon mode.
 
-    $ docker -d -H="192.168.1.9:2375" --api-enable-cors
+    $ docker -d -H="192.168.1.9:2375" --api-enable-cors 

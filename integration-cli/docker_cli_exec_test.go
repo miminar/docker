@@ -163,6 +163,7 @@ func TestExecAfterContainerRestart(t *testing.T) {
 }
 
 func TestExecAfterDaemonRestart(t *testing.T) {
+	testRequires(t, SameHostDaemon)
 	defer deleteAllContainers()
 
 	d := NewDaemon(t)
@@ -528,6 +529,7 @@ func TestLinksPingLinkedContainersOnRename(t *testing.T) {
 }
 
 func TestRunExecDir(t *testing.T) {
+	testRequires(t, SameHostDaemon)
 	cmd := exec.Command(dockerBinary, "run", "-d", "busybox", "top")
 	out, _, err := runCommandWithOutput(cmd)
 	if err != nil {
@@ -628,6 +630,7 @@ func TestRunExecDir(t *testing.T) {
 }
 
 func TestRunMutableNetworkFiles(t *testing.T) {
+	testRequires(t, SameHostDaemon)
 	defer deleteAllContainers()
 
 	for _, fn := range []string{"resolv.conf", "hosts"} {

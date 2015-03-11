@@ -5,10 +5,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
+	"github.com/docker/docker/daemon/execdriver/native/template"
+	"github.com/docker/docker/pkg/ulimit"
 	"github.com/docker/libcontainer"
 	"github.com/docker/libcontainer/devices"
+	"github.com/docker/libcontainer/mount/mode"
 )
 
 // Context is a generic key value pair that allows
@@ -72,6 +76,7 @@ type Network struct {
 	Mtu            int               `json:"mtu"`
 	ContainerID    string            `json:"container_id"` // id of the container to join network.
 	HostNetworking bool              `json:"host_networking"`
+	NetNs          string            `json:"netns"` // netns to join
 }
 
 // IPC settings of the container
@@ -98,10 +103,11 @@ type NetworkInterface struct {
 }
 
 type Resources struct {
-	Memory     int64  `json:"memory"`
-	MemorySwap int64  `json:"memory_swap"`
-	CpuShares  int64  `json:"cpu_shares"`
-	Cpuset     string `json:"cpuset"`
+	Memory     int64            `json:"memory"`
+	MemorySwap int64            `json:"memory_swap"`
+	CpuShares  int64            `json:"cpu_shares"`
+	Cpuset     string           `json:"cpuset"`
+	Rlimits    []*ulimit.Rlimit `json:"rlimits"`
 }
 
 type ResourceStats struct {
@@ -112,11 +118,11 @@ type ResourceStats struct {
 }
 
 type Mount struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Writable    bool   `json:"writable"`
-	Private     bool   `json:"private"`
-	Slave       bool   `json:"slave"`
+	Source      string    `json:"source"`
+	Destination string    `json:"destination"`
+	Mode        mode.Mode `json:"mode"`
+	Private     bool      `json:"private"`
+	Slave       bool      `json:"slave"`
 }
 
 // Describes a process that will be run inside a container.
@@ -155,4 +161,72 @@ type Command struct {
 	MountLabel         string            `json:"mount_label"`
 	LxcConfig          []string          `json:"lxc_config"`
 	AppArmorProfile    string            `json:"apparmor_profile"`
+}
+
+func InitContainer(c *Command) *libcontainer.Config {
+	container := template.New()
+
+	container.Hostname = getEnv("HOSTNAME", c.ProcessConfig.Env)
+	container.Tty = c.ProcessConfig.Tty
+	container.User = c.ProcessConfig.User
+	container.WorkingDir = c.WorkingDir
+	container.Env = c.ProcessConfig.Env
+	container.Cgroups.Name = c.ID
+	container.Cgroups.AllowedDevices = c.AllowedDevices
+	container.MountConfig.DeviceNodes = c.AutoCreatedDevices
+	container.RootFs = c.Rootfs
+	container.MountConfig.ReadonlyFs = c.ReadonlyRootfs
+
+	// check to see if we are running in ramdisk to disable pivot root
+	container.MountConfig.NoPivotRoot = os.Getenv("DOCKER_RAMDISK") != ""
+	container.RestrictSys = true
+	return container
+}
+
+func getEnv(key string, env []string) string {
+	for _, pair := range env {
+		parts := strings.Split(pair, "=")
+		if parts[0] == key {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
+func SetupCgroups(container *libcontainer.Config, c *Command) error {
+	if c.Resources != nil {
+		container.Cgroups.CpuShares = c.Resources.CpuShares
+		container.Cgroups.Memory = c.Resources.Memory
+		container.Cgroups.MemoryReservation = c.Resources.Memory
+		container.Cgroups.MemorySwap = c.Resources.MemorySwap
+		container.Cgroups.CpusetCpus = c.Resources.Cpuset
+	}
+
+	return nil
+}
+
+func Stats(stateFile string, containerMemoryLimit int64, machineMemory int64) (*ResourceStats, error) {
+	state, err := libcontainer.GetState(stateFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotRunning
+		}
+		return nil, err
+	}
+	now := time.Now()
+	stats, err := libcontainer.GetStats(nil, state)
+	if err != nil {
+		return nil, err
+	}
+	// if the container does not have any memory limit specified set the
+	// limit to the machines memory
+	memoryLimit := containerMemoryLimit
+	if memoryLimit == 0 {
+		memoryLimit = machineMemory
+	}
+	return &ResourceStats{
+		Read:           now,
+		ContainerStats: stats,
+		MemoryLimit:    memoryLimit,
+	}, nil
 }

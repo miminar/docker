@@ -257,6 +257,7 @@ func SetupInitLayer(initLayer string) error {
 		"/dev/pts":         "dir",
 		"/dev/shm":         "dir",
 		"/proc":            "dir",
+		"/run":             "dir",
 		"/sys":             "dir",
 		"/.dockerinit":     "file",
 		"/.dockerenv":      "file",
@@ -265,6 +266,7 @@ func SetupInitLayer(initLayer string) error {
 		"/etc/hostname":    "file",
 		"/dev/console":     "file",
 		"/etc/mtab":        "/proc/mounts",
+		"/run/secrets":     "dir",
 	} {
 		parts := strings.Split(pth, "/")
 		prev := "/"

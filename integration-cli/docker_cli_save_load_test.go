@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/docker/docker/registry"
 )
 
 // save a repo using gz compression and try to load it using stdout
@@ -164,7 +166,7 @@ func TestSaveImageId(t *testing.T) {
 		t.Fatalf("failed to tag repo: %s, %v", out, err)
 	}
 
-	idLongCmd := exec.Command(dockerBinary, "images", "-q", "--no-trunc", repoName)
+	idLongCmd := exec.Command(dockerBinary, "images", "-q", "--no-trunc", registry.INDEXNAME+"/"+repoName)
 	out, _, err := runCommandWithOutput(idLongCmd)
 	if err != nil {
 		t.Fatalf("failed to get repo ID: %s, %v", out, err)
@@ -172,7 +174,7 @@ func TestSaveImageId(t *testing.T) {
 
 	cleanedLongImageID := stripTrailingCharacters(out)
 
-	idShortCmd := exec.Command(dockerBinary, "images", "-q", repoName)
+	idShortCmd := exec.Command(dockerBinary, "images", "-q", registry.INDEXNAME+"/"+repoName)
 	out, _, err = runCommandWithOutput(idShortCmd)
 	if err != nil {
 		t.Fatalf("failed to get repo short ID: %s, %v", out, err)
@@ -376,9 +378,10 @@ func TestSaveDirectoryPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	saveCmdFinal := fmt.Sprintf("%s save %s | tar -xf - -C %s", dockerBinary, name, extractionDirectory)
-	saveCmd := exec.Command("bash", "-c", saveCmdFinal)
-	if out, _, err := runCommandWithOutput(saveCmd); err != nil {
+	if out, _, err := runCommandPipelineWithOutput(
+		exec.Command(dockerBinary, "save", name),
+		exec.Command("tar", "-xf", "-", "-C", extractionDirectory),
+	); err != nil {
 		t.Errorf("failed to save and extract image: %s", out)
 	}
 
@@ -389,6 +392,7 @@ func TestSaveDirectoryPermissions(t *testing.T) {
 
 	found := false
 	for _, entry := range dirs {
+		var entriesSansDev []string
 		if entry.IsDir() {
 			layerPath := filepath.Join(extractionDirectory, entry.Name(), "layer.tar")
 
@@ -398,11 +402,16 @@ func TestSaveDirectoryPermissions(t *testing.T) {
 			}
 
 			entries, err := ListTar(f)
+			for _, e := range entries {
+				if !strings.Contains(e, "dev/") {
+					entriesSansDev = append(entriesSansDev, e)
+				}
+			}
 			if err != nil {
 				t.Fatalf("encountered error while listing tar entries: %s", err)
 			}
 
-			if reflect.DeepEqual(entries, layerEntries) || reflect.DeepEqual(entries, layerEntriesAUFS) {
+			if reflect.DeepEqual(entriesSansDev, layerEntries) || reflect.DeepEqual(entriesSansDev, layerEntriesAUFS) {
 				found = true
 				break
 			}

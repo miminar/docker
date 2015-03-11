@@ -690,15 +690,15 @@ func TestBuildSixtySteps(t *testing.T) {
 func TestBuildAddSingleFileToRoot(t *testing.T) {
 	name := "testaddimg"
 	defer deleteImages(name)
-	ctx, err := fakeContext(`FROM busybox
+	ctx, err := fakeContext(fmt.Sprintf(`FROM busybox
 RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 RUN echo 'dockerio:x:1001:' >> /etc/group
 RUN touch /exists
 RUN chown dockerio.dockerio /exists
 ADD test_file /
 RUN [ $(ls -l /test_file | awk '{print $3":"$4}') = 'root:root' ]
-RUN [ $(ls -l /test_file | awk '{print $1}') = '-rw-r--r--' ]
-RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
+RUN [ $(ls -l /test_file | awk '{print $1}') = '%s' ]
+RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`, expectedFileChmod),
 		map[string]string{
 			"test_file": "test1",
 		})
@@ -770,16 +770,24 @@ RUN [ $(ls -l /exists/exists_file | awk '{print $3":"$4}') = 'dockerio:dockerio'
 }
 
 func TestBuildCopyAddMultipleFiles(t *testing.T) {
+	server, err := fakeStorage(map[string]string{
+		"robots.txt": "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
 	name := "testcopymultiplefilestofile"
 	defer deleteImages(name)
-	ctx, err := fakeContext(`FROM busybox
+	ctx, err := fakeContext(fmt.Sprintf(`FROM busybox
 RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 RUN echo 'dockerio:x:1001:' >> /etc/group
 RUN mkdir /exists
 RUN touch /exists/exists_file
 RUN chown -R dockerio.dockerio /exists
 COPY test_file1 test_file2 /exists/
-ADD test_file3 test_file4 https://dockerproject.com/robots.txt /exists/
+ADD test_file3 test_file4 %s/robots.txt /exists/
 RUN [ $(ls -l / | grep exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]
 RUN [ $(ls -l /exists/test_file1 | awk '{print $3":"$4}') = 'root:root' ]
 RUN [ $(ls -l /exists/test_file2 | awk '{print $3":"$4}') = 'root:root' ]
@@ -789,7 +797,7 @@ RUN [ $(ls -l /exists/test_file4 | awk '{print $3":"$4}') = 'root:root' ]
 RUN [ $(ls -l /exists/robots.txt | awk '{print $3":"$4}') = 'root:root' ]
 
 RUN [ $(ls -l /exists/exists_file | awk '{print $3":"$4}') = 'dockerio:dockerio' ]
-`,
+`, server.URL),
 		map[string]string{
 			"test_file1": "test1",
 			"test_file2": "test2",
@@ -1255,7 +1263,7 @@ RUN [ $(ls -l /exists/test_file | awk '{print $3":"$4}') = 'root:root' ]`,
 func TestBuildAddWholeDirToRoot(t *testing.T) {
 	name := "testaddwholedirtoroot"
 	defer deleteImages(name)
-	ctx, err := fakeContext(`FROM busybox
+	ctx, err := fakeContext(fmt.Sprintf(`FROM busybox
 RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 RUN echo 'dockerio:x:1001:' >> /etc/group
 RUN touch /exists
@@ -1264,8 +1272,8 @@ ADD test_dir /test_dir
 RUN [ $(ls -l / | grep test_dir | awk '{print $3":"$4}') = 'root:root' ]
 RUN [ $(ls -l / | grep test_dir | awk '{print $1}') = 'drwxr-xr-x' ]
 RUN [ $(ls -l /test_dir/test_file | awk '{print $3":"$4}') = 'root:root' ]
-RUN [ $(ls -l /test_dir/test_file | awk '{print $1}') = '-rw-r--r--' ]
-RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
+RUN [ $(ls -l /test_dir/test_file | awk '{print $1}') = '%s' ]
+RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`, expectedFileChmod),
 		map[string]string{
 			"test_dir/test_file": "test1",
 		})
@@ -1328,15 +1336,15 @@ RUN [ $(ls -l /usr/bin/suidbin | awk '{print $1}') = '-rwsr-xr-x' ]`,
 func TestBuildCopySingleFileToRoot(t *testing.T) {
 	name := "testcopysinglefiletoroot"
 	defer deleteImages(name)
-	ctx, err := fakeContext(`FROM busybox
+	ctx, err := fakeContext(fmt.Sprintf(`FROM busybox
 RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 RUN echo 'dockerio:x:1001:' >> /etc/group
 RUN touch /exists
 RUN chown dockerio.dockerio /exists
 COPY test_file /
 RUN [ $(ls -l /test_file | awk '{print $3":"$4}') = 'root:root' ]
-RUN [ $(ls -l /test_file | awk '{print $1}') = '-rw-r--r--' ]
-RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
+RUN [ $(ls -l /test_file | awk '{print $1}') = '%s' ]
+RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`, expectedFileChmod),
 		map[string]string{
 			"test_file": "test1",
 		})
@@ -1488,7 +1496,7 @@ RUN [ $(ls -l /exists/test_file | awk '{print $3":"$4}') = 'root:root' ]`,
 func TestBuildCopyWholeDirToRoot(t *testing.T) {
 	name := "testcopywholedirtoroot"
 	defer deleteImages(name)
-	ctx, err := fakeContext(`FROM busybox
+	ctx, err := fakeContext(fmt.Sprintf(`FROM busybox
 RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
 RUN echo 'dockerio:x:1001:' >> /etc/group
 RUN touch /exists
@@ -1497,8 +1505,8 @@ COPY test_dir /test_dir
 RUN [ $(ls -l / | grep test_dir | awk '{print $3":"$4}') = 'root:root' ]
 RUN [ $(ls -l / | grep test_dir | awk '{print $1}') = 'drwxr-xr-x' ]
 RUN [ $(ls -l /test_dir/test_file | awk '{print $3":"$4}') = 'root:root' ]
-RUN [ $(ls -l /test_dir/test_file | awk '{print $1}') = '-rw-r--r--' ]
-RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
+RUN [ $(ls -l /test_dir/test_file | awk '{print $1}') = '%s' ]
+RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`, expectedFileChmod),
 		map[string]string{
 			"test_dir/test_file": "test1",
 		})
@@ -1583,7 +1591,6 @@ func TestBuildAddBadLinks(t *testing.T) {
 		symlinkTarget = fmt.Sprintf("/../../../../../../../../../../../..%s", tempDir)
 	}
 
-	t.Logf("***=== %s", symlinkTarget)
 	tarPath := filepath.Join(ctx.Dir, "links.tar")
 	nonExistingFile := filepath.Join(tempDir, targetFile)
 	fooPath := filepath.Join(ctx.Dir, targetFile)
@@ -2564,6 +2571,10 @@ func TestBuildConditionalCache(t *testing.T) {
 	ctx, err := fakeContext(dockerfile, map[string]string{
 		"foo": "hello",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
 
 	id1, err := buildImageFromContext(name, ctx, true)
 	if err != nil {
@@ -3454,6 +3465,8 @@ func TestBuildDockerignoringDockerfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err = buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatalf("Didn't ignore Dockerfile correctly:%s", err)
 	}
@@ -3484,6 +3497,8 @@ func TestBuildDockerignoringRenamedDockerfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err = buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatalf("Didn't ignore MyDockerfile correctly:%s", err)
 	}
@@ -3804,6 +3819,8 @@ RUN    [ "$abc" = "\\\"foo\\\"" ]
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	_, err = buildImageFromContext(name, ctx, true)
 	if err != nil {
 		t.Fatal(err)
@@ -4414,6 +4431,28 @@ func TestBuildWithTabs(t *testing.T) {
 	logDone("build - with tabs")
 }
 
+func TestBuildLabels(t *testing.T) {
+	name := "testbuildlabel"
+	expected := `{"License":"GPL","Vendor":"Acme"}`
+	defer deleteImages(name)
+	_, err := buildImage(name,
+		`FROM busybox
+		LABEL Vendor=Acme
+                LABEL License GPL`,
+		true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := inspectFieldJSON(name, "Config.Labels")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != expected {
+		t.Fatalf("Labels %s, expected %s", res, expected)
+	}
+	logDone("build - label")
+}
+
 func TestBuildStderr(t *testing.T) {
 	// This test just makes sure that no non-error output goes
 	// to stderr
@@ -4680,6 +4719,127 @@ func TestBuildRenamedDockerfile(t *testing.T) {
 	}
 
 	logDone("build - rename dockerfile")
+}
+
+func TestBuildFromMixedcaseDockerfile(t *testing.T) {
+	testRequires(t, UnixCli) // Dockerfile overwrites dockerfile on windows
+	defer deleteImages("test1")
+
+	ctx, err := fakeContext(`FROM busybox
+	RUN echo from dockerfile`,
+		map[string]string{
+			"dockerfile": "FROM busybox\nRUN echo from dockerfile",
+		})
+	defer ctx.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := dockerCmdInDir(t, ctx.Dir, "build", "-t", "test1", ".")
+	if err != nil {
+		t.Fatalf("Failed to build: %s\n%s", out, err)
+	}
+
+	if !strings.Contains(out, "from dockerfile") {
+		t.Fatalf("Missing proper output: %s", out)
+	}
+
+	logDone("build - mixedcase Dockerfile")
+}
+
+func TestBuildWithTwoDockerfiles(t *testing.T) {
+	testRequires(t, UnixCli) // Dockerfile overwrites dockerfile on windows
+	defer deleteImages("test1")
+
+	ctx, err := fakeContext(`FROM busybox
+RUN echo from Dockerfile`,
+		map[string]string{
+			"dockerfile": "FROM busybox\nRUN echo from dockerfile",
+		})
+	defer ctx.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := dockerCmdInDir(t, ctx.Dir, "build", "-t", "test1", ".")
+	if err != nil {
+		t.Fatalf("Failed to build: %s\n%s", out, err)
+	}
+
+	if !strings.Contains(out, "from Dockerfile") {
+		t.Fatalf("Missing proper output: %s", out)
+	}
+
+	logDone("build - two Dockerfiles")
+}
+
+func TestBuildFromURLWithF(t *testing.T) {
+	defer deleteImages("test1")
+
+	server, err := fakeStorage(map[string]string{"baz": `FROM busybox
+RUN echo from baz
+COPY * /tmp/
+RUN find /tmp/`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	ctx, err := fakeContext(`FROM busybox
+RUN echo from Dockerfile`,
+		map[string]string{})
+	defer ctx.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Make sure that -f is ignored and that we don't use the Dockerfile
+	// that's in the current dir
+	out, _, err := dockerCmdInDir(t, ctx.Dir, "build", "-f", "baz", "-t", "test1", server.URL+"/baz")
+	if err != nil {
+		t.Fatalf("Failed to build: %s\n%s", out, err)
+	}
+
+	if !strings.Contains(out, "from baz") ||
+		strings.Contains(out, "/tmp/baz") ||
+		!strings.Contains(out, "/tmp/Dockerfile") {
+		t.Fatalf("Missing proper output: %s", out)
+	}
+
+	logDone("build - from URL with -f")
+}
+
+func TestBuildFromStdinWithF(t *testing.T) {
+	defer deleteImages("test1")
+
+	ctx, err := fakeContext(`FROM busybox
+RUN echo from Dockerfile`,
+		map[string]string{})
+	defer ctx.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Make sure that -f is ignored and that we don't use the Dockerfile
+	// that's in the current dir
+	dockerCommand := exec.Command(dockerBinary, "build", "-f", "baz", "-t", "test1", "-")
+	dockerCommand.Dir = ctx.Dir
+	dockerCommand.Stdin = strings.NewReader(`FROM busybox
+RUN echo from baz
+COPY * /tmp/
+RUN find /tmp/`)
+	out, status, err := runCommandWithOutput(dockerCommand)
+	if err != nil || status != 0 {
+		t.Fatalf("Error building: %s", err)
+	}
+
+	if !strings.Contains(out, "from baz") ||
+		strings.Contains(out, "/tmp/baz") ||
+		!strings.Contains(out, "/tmp/Dockerfile") {
+		t.Fatalf("Missing proper output: %s", out)
+	}
+
+	logDone("build - from stdin with -f")
 }
 
 func TestBuildFromOfficialNames(t *testing.T) {
@@ -4978,4 +5138,203 @@ func TestBuildNotVerbose(t *testing.T) {
 	}
 
 	logDone("build - not verbose")
+}
+
+func TestBuildWithAdditionalRegistry(t *testing.T) {
+	name := "testbuildwithadditionalregistry"
+	reg := setupAndGetRegistryAt(t, privateRegistryURLs[0])
+	defer reg.Close()
+	d := NewDaemon(t)
+	if err := d.StartWithBusybox("--add-registry=" + reg.url); err != nil {
+		t.Fatalf("we should have been able to start the daemon with passing add-registry=%s: %v", reg.url, err)
+	}
+	defer d.Stop()
+	busyboxId := d.getAndTestImageEntry(t, 1, reg.url+"/busybox", "").id
+
+	// build image based on hello-world from docker.io
+	_, _, err := d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM library/hello-world
+  ENV test %s
+  `, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helloWorldId := d.getAndTestImageEntry(t, 3, "docker.io/hello-world", "").id
+	if helloWorldId == busyboxId {
+		t.Fatalf("docker.io/hello-world must have different ID than busybox image")
+	}
+	buildId := d.getAndTestImageEntry(t, 3, reg.url+"/"+name, "").id
+	if buildId == helloWorldId || buildId == busyboxId {
+		t.Fatalf("built image %s must have different ID than other images", reg.url+"/"+name)
+	}
+	res, err := d.inspectField(name, "Parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res, helloWorldId) {
+		t.Fatal("built image %s should have docker.io/hello-world(id=%s) as a parent, not %s", name, helloWorldId, res)
+	}
+
+	// push busybox to additional registry as "library/hello-world" and remove all local images
+	if out, err := d.Cmd("tag", reg.url+"/busybox", reg.url+"/library/hello-world"); err != nil {
+		t.Fatalf("failed to tag image %s: error %v, output %q", reg.url+"/busybox", err, out)
+	}
+	if out, err := d.Cmd("push", reg.url+"/library/hello-world"); err != nil {
+		t.Fatalf("failed to push image %s: error %v, output %q", reg.url+"/library/hello-world", err, out)
+	}
+	toRemove := []string{reg.url + "/library/hello-world", reg.url + "/busybox", "docker.io/hello-world", reg.url + "/" + name}
+	if out, err := d.Cmd("rmi", toRemove...); err != nil {
+		t.Fatalf("failed to remove images %v: %v, output: %s", toRemove, err, out)
+	}
+	d.getAndTestImageEntry(t, 0, "", "")
+
+	// Build again. The result shall now be based on busybox image from
+	// additional registry.
+	_, _, err = d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM library/hello-world
+  ENV test %s
+  `, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.getAndTestImageEntry(t, 2, reg.url+"/library/hello-world", busyboxId)
+	d.getAndTestImageEntry(t, 2, reg.url+"/"+name, "")
+	res, err = d.inspectField(name, "Parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res, busyboxId) {
+		t.Fatal("built image %s should have busybox image (id=%s) as a parent, not %s", name, busyboxId, res)
+	}
+
+	// build again with docker.io explicitly specified
+	_, _, err = d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM docker.io/library/hello-world
+  ENV test %s
+  `, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.getAndTestImageEntry(t, 3, "docker.io/hello-world", helloWorldId)
+	d.getAndTestImageEntry(t, 3, reg.url+"/"+name, "")
+	res, err = d.inspectField(name, "Parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res, helloWorldId) {
+		t.Fatal("built image %s should have docker.io/hello-world(id=%s) as a parent, not %s", name, helloWorldId, res)
+	}
+
+	// build again from additional registry explicitly specified
+	_, _, err = d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM %s/library/hello-world
+  ENV test %s
+  `, reg.url, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.getAndTestImageEntry(t, 3, reg.url+"/library/hello-world", busyboxId)
+	tmpId := d.getAndTestImageEntry(t, 3, reg.url+"/"+name, "").id
+	if tmpId == buildId || tmpId == busyboxId || tmpId == helloWorldId {
+		t.Fatalf("built image must have unique ID")
+	}
+	res, err = d.inspectField(name, "Parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res, busyboxId) {
+		t.Fatal("built image %s should have busybox(id=%s) as a parent, not %s", name, busyboxId, res)
+	}
+
+	logDone("build - with additional registry")
+}
+
+// Test building of image based on busybox with public registry blocked. Name
+// of image that shall be built is specified by `name`. Parameter `daemonArgs`
+// shall contain at least one `--block-registry` flag.
+func doTestBuildWithPublicRegistryBlocked(t *testing.T, name string, daemonArgs []string) {
+	allBlocked := false
+	for _, arg := range daemonArgs {
+		if arg == "--block-registry=all" {
+			allBlocked = true
+		}
+	}
+	reg := setupAndGetRegistryAt(t, privateRegistryURLs[0])
+	defer reg.Close()
+	d := NewDaemon(t)
+	if err := d.StartWithBusybox(daemonArgs...); err != nil {
+		t.Fatalf("we should have been able to start the daemon with passing { %s }: %v", strings.Join(daemonArgs, ", "), err)
+	}
+	defer d.Stop()
+	busyboxId := d.getAndTestImageEntry(t, 1, "busybox", "").id
+
+	// try to build image based on hello-world from docker.io
+	_, _, err := d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM library/hello-world
+  ENV test %s
+  `, name), true)
+	if err == nil {
+		t.Fatal("build should have failed because of public registry being blocked")
+	}
+
+	// now base the image on local busybox image
+	_, _, err = d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM busybox
+  ENV test %s
+  `, name), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.getAndTestImageEntry(t, 2, name, "")
+	if res, err := d.inspectField(name, "Parent"); err != nil {
+		t.Fatal(err)
+	} else if !strings.HasPrefix(res, busyboxId) {
+		t.Fatal("built image %s should have busybox(id=%s) as a parent, not %s", name, busyboxId, res)
+	}
+
+	if out, err := d.Cmd("tag", "busybox", reg.url+"/library/busybox"); err != nil {
+		t.Fatalf("failed to tag image %s: error %v, output %q", "busybox", err, out)
+	}
+	if out, err := d.Cmd("push", reg.url+"/library/busybox"); !allBlocked && err != nil {
+		t.Fatalf("failed to push image %s: error %v, output %q", reg.url+"/library/busybox", err, out)
+	} else if allBlocked && err == nil {
+		t.Fatalf("push to private registry should have failed, output: %q", out)
+	}
+
+	toRemove := []string{"busybox", reg.url + "/library/busybox"}
+	if out, err := d.Cmd("rmi", toRemove...); err != nil {
+		t.Fatalf("failed to remove images %v: %v, output: %s", toRemove, err, out)
+	}
+	d.getAndTestImageEntry(t, 1, name, "")
+
+	// now base the image on busybox from private registry
+	_, _, err = d.buildImageWithOut(name, fmt.Sprintf(`
+  FROM %s/library/busybox
+  ENV test %s
+  `, reg.url, name), true)
+	if !allBlocked && err != nil {
+		t.Fatal(err)
+	} else if allBlocked && err == nil {
+		t.Fatalf("the build should have failed due to all registries being blocked")
+	}
+	if !allBlocked {
+		d.getAndTestImageEntry(t, 2, name, "")
+		if res, err := d.inspectField(name, "Parent"); err != nil {
+			t.Fatal(err)
+		} else if !strings.HasPrefix(res, busyboxId) {
+			t.Fatal("built image %s should have busybox image (id=%s) as a parent, not %s", name, busyboxId, res)
+		}
+	}
+}
+
+func TestBuildWithPublicRegistryBlocked(t *testing.T) {
+	for _, blockedRegistry := range []string{"public", "docker.io"} {
+		doTestBuildWithPublicRegistryBlocked(t, "testbuildpublicregistryblocked", []string{"--block-registry=" + blockedRegistry})
+	}
+	logDone("build - with public registry blocked")
+}
+
+func TestBuildWithAllRegistriesBlocked(t *testing.T) {
+	doTestBuildWithPublicRegistryBlocked(t, "testbuildwithallregistriesblocked", []string{"--block-registry=all"})
+	logDone("pull - build with all registries blocked")
 }

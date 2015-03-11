@@ -1,6 +1,10 @@
 package registry
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/engine"
 )
@@ -52,7 +56,10 @@ func (s *Service) Auth(job *engine.Job) engine.Status {
 	addr := authConfig.ServerAddress
 	if addr == "" {
 		// Use the official registry address if not specified.
-		addr = IndexServerAddress()
+		addr = IndexServerAddress("")
+	}
+	if addr == "" {
+		return job.Errorf("No configured registry to authenticate to.")
 	}
 
 	if index, err = ResolveIndexInfo(job, addr); err != nil {
@@ -77,6 +84,106 @@ func (s *Service) Auth(job *engine.Job) engine.Status {
 	return engine.StatusOK
 }
 
+// Compare two registries taking into consideration just their index names.
+func cmpRepoNamesByIndexName(fst, snd string) int {
+	ia := strings.Index(fst, "/")
+	ib := strings.Index(snd, "/")
+	if ia >= 0 && ib >= 0 {
+		switch {
+		case fst[:ia] < snd[:ib]:
+			return -1
+		case fst[:ia] > snd[:ib]:
+			return 1
+		}
+	}
+	switch {
+	case ia < ib:
+		return -1
+	case ia > ib:
+		return 1
+	}
+	return 0
+}
+
+// Compare two items in the result table of search command.
+// First compare the index name name. Second compare their rating. Then compare their name.
+func cmpSearchResults(fst, snd *engine.Env) int {
+	nameA := fst.Get("name")
+	nameB := snd.Get("name")
+	ret := cmpRepoNamesByIndexName(nameA, nameB)
+	if ret != 0 {
+		return ret
+	}
+	starsA := fst.Get("star_count")
+	starsB := snd.Get("star_count")
+	intA, errA := strconv.ParseInt(starsA, 10, 64)
+	intB, errB := strconv.ParseInt(starsB, 10, 64)
+	if errA == nil && errB == nil {
+		switch {
+		case intA > intB:
+			return -1
+		case intA < intB:
+			return 1
+		}
+	}
+	switch {
+	case starsA > starsB:
+		return -1
+	case starsA < starsB:
+		return 1
+	case nameA < nameB:
+		return -1
+	case nameA > nameB:
+		return 1
+	}
+	return 0
+}
+
+func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
+	var (
+		metaHeaders = map[string][]string{}
+		authConfig  = &AuthConfig{}
+		registryName string
+		resultName string
+	)
+	job.GetenvJson("authConfig", authConfig)
+	job.GetenvJson("metaHeaders", metaHeaders)
+
+	repoInfo, err := ResolveRepositoryInfo(job, term)
+	if err != nil {
+		return err
+	}
+	endpoint, err := repoInfo.GetEndpoint()
+	if err != nil {
+		return err
+	}
+	r, err := NewSession(authConfig, HTTPRequestFactory(metaHeaders), endpoint, true)
+	if err != nil {
+		return err
+	}
+	results, err := r.SearchRepositories(repoInfo.GetSearchTerm())
+	if err != nil {
+		return err
+	}
+	for _, result := range results.Results {
+		out := &engine.Env{}
+		// Check if search result has is fully qualified with registry
+		// If not, assume REGISTRY = INDEX
+		if RepositoryNameHasIndex(result.Name) {		
+			registryName, resultName = splitReposName(result.Name, false)
+			result.Name = resultName
+		} else {
+			registryName = repoInfo.Index.Name
+		}
+		out.Import(result)
+		// Now add the index in which we found the result to the json. (not sure this is really the right place for this)
+		out.Set("registryName",registryName)
+		out.Set("indexName",repoInfo.Index.Name)
+		outs.Add(out)
+	}
+	return nil
+}
+
 // Search queries the public registry for images matching the specified
 // search terms, and returns the results.
 //
@@ -92,43 +199,59 @@ func (s *Service) Auth(job *engine.Job) engine.Status {
 // Output:
 //	Results are sent as a collection of structured messages (using engine.Table).
 //	Each result is sent as a separate message.
-//	Results are ordered by number of stars on the public registry.
+//	Results are ordered by:
+//	    1. registry's index name
+//          2. number of stars on registry
+//          3. registry's name
 func (s *Service) Search(job *engine.Job) engine.Status {
 	if n := len(job.Args); n != 1 {
 		return job.Errorf("Usage: %s TERM", job.Name)
 	}
 	var (
-		term        = job.Args[0]
-		metaHeaders = map[string][]string{}
-		authConfig  = &AuthConfig{}
+		term = job.Args[0]
+		outs = engine.NewTableWithCmpFunc(cmpSearchResults, 0)
 	)
-	job.GetenvJson("authConfig", authConfig)
-	job.GetenvJson("metaHeaders", metaHeaders)
 
-	repoInfo, err := ResolveRepositoryInfo(job, term)
-	if err != nil {
-		return job.Error(err)
+	// helper for concurrent queries
+	searchRoutine := func(term string, c chan<- error) {
+		err := searchTerm(job, outs, term)
+		c <- err
 	}
-	// *TODO: Search multiple indexes.
-	endpoint, err := repoInfo.GetEndpoint()
-	if err != nil {
-		return job.Error(err)
+
+	if RepositoryNameHasIndex(term) {
+		if err := searchTerm(job, outs, term); err != nil {
+			return job.Error(err)
+		}
+	} else if len(RegistryList) < 1 {
+		return job.Errorf("No configured repository to search.")
+	} else {
+		var (
+			err              error
+			successfulSearch = false
+			resultChan       = make(chan error)
+		)
+		// query all registries in parallel
+		for i, r := range RegistryList {
+			if i > 0 {
+				job.Args[0] = fmt.Sprintf("%s/%s", r, term)
+			} else {
+				job.Args[0] = term
+			}
+			go searchRoutine(job.Args[0], resultChan)
+		}
+		for _ = range RegistryList {
+			err = <-resultChan
+			if err == nil {
+				successfulSearch = true
+			} else {
+				log.Errorf("%s", err.Error())
+			}
+		}
+		if !successfulSearch {
+			return job.Error(err)
+		}
 	}
-	r, err := NewSession(authConfig, HTTPRequestFactory(metaHeaders), endpoint, true)
-	if err != nil {
-		return job.Error(err)
-	}
-	results, err := r.SearchRepositories(repoInfo.GetSearchTerm())
-	if err != nil {
-		return job.Error(err)
-	}
-	outs := engine.NewTable("star_count", 0)
-	for _, result := range results.Results {
-		out := &engine.Env{}
-		out.Import(result)
-		outs.Add(out)
-	}
-	outs.ReverseSort()
+	outs.Sort()
 	if _, err := outs.WriteListTo(job.Stdout); err != nil {
 		return job.Error(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/parsers"
+	"github.com/docker/docker/pkg/ulimit"
 	"github.com/docker/docker/pkg/units"
 	"github.com/docker/docker/utils"
 )
@@ -31,6 +32,9 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		flLinks   = opts.NewListOpts(opts.ValidateLink)
 		flEnv     = opts.NewListOpts(opts.ValidateEnv)
 		flDevices = opts.NewListOpts(opts.ValidatePath)
+
+		ulimits   = make(map[string]*ulimit.Ulimit)
+		flUlimits = opts.NewUlimitOpt(ulimits)
 
 		flPublish     = opts.NewListOpts(nil)
 		flExpose      = opts.NewListOpts(nil)
@@ -66,7 +70,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		flReadonlyRootfs  = cmd.Bool([]string{"-read-only"}, false, "Mount the container's root filesystem as read only")
 	)
 
-	cmd.Var(&flAttach, []string{"a", "-attach"}, "Attach to STDIN, STDOUT or STDERR.")
+	cmd.Var(&flAttach, []string{"a", "-attach"}, "Attach to STDIN, STDOUT or STDERR")
 	cmd.Var(&flVolumes, []string{"v", "-volume"}, "Bind mount a volume")
 	cmd.Var(&flLinks, []string{"#link", "-link"}, "Add link to another container")
 	cmd.Var(&flDevices, []string{"-device"}, "Add a host device to the container")
@@ -82,6 +86,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	cmd.Var(&flCapAdd, []string{"-cap-add"}, "Add Linux capabilities")
 	cmd.Var(&flCapDrop, []string{"-cap-drop"}, "Drop Linux capabilities")
 	cmd.Var(&flSecurityOpt, []string{"-security-opt"}, "Security Options")
+	cmd.Var(flUlimits, []string{"-ulimit"}, "Ulimit options")
 
 	cmd.Require(flag.Min, 1)
 
@@ -94,6 +99,12 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		return nil, nil, cmd, ErrInvalidWorkingDirectory
 	}
 
+	// Validate the input mac address
+	if *flMacAddress != "" {
+		if _, err := opts.ValidateMACAddress(*flMacAddress); err != nil {
+			return nil, nil, cmd, fmt.Errorf("%s is not a valid mac address", *flMacAddress)
+		}
+	}
 	var (
 		attachStdin  = flAttach.Get("stdin")
 		attachStdout = flAttach.Get("stdout")
@@ -309,6 +320,8 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		RestartPolicy:   restartPolicy,
 		SecurityOpt:     flSecurityOpt.GetAll(),
 		ReadonlyRootfs:  *flReadonlyRootfs,
+		Ulimits:         flUlimits.GetList(),
+		MountRun:        true,
 	}
 
 	// When allocating stdin in attached mode, close stdin at client disconnect
@@ -393,6 +406,10 @@ func parseNetMode(netMode string) (NetworkMode, error) {
 	case "container":
 		if len(parts) < 2 || parts[1] == "" {
 			return "", fmt.Errorf("invalid container format container:<name|id>")
+		}
+	case "ns":
+		if len(parts) < 2 || parts[1] == "" {
+			return "", fmt.Errorf("invalid netns format ns:<path>")
 		}
 	default:
 		return "", fmt.Errorf("invalid --net: %s", netMode)

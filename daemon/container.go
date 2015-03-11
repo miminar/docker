@@ -26,13 +26,17 @@ import (
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/broadcastwriter"
 	"github.com/docker/docker/pkg/common"
+	"github.com/docker/docker/pkg/directory"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/networkfs/etchosts"
 	"github.com/docker/docker/pkg/networkfs/resolvconf"
 	"github.com/docker/docker/pkg/promise"
 	"github.com/docker/docker/pkg/symlink"
+	"github.com/docker/docker/pkg/systemd"
+	"github.com/docker/docker/pkg/ulimit"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
+	"github.com/docker/libcontainer/mount/mode"
 )
 
 const DefaultPathEnv = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -91,8 +95,10 @@ type Container struct {
 	Volumes map[string]string
 	// Store rw/ro in a separate structure to preserve reverse-compatibility on-disk.
 	// Easier than migrating older container configs :)
-	VolumesRW  map[string]bool
-	hostConfig *runconfig.HostConfig
+	// VolumesRW is no longer used, but docker-py fails since it is hard coded in its tests
+	VolumesRW   map[string]bool
+	VolumesMode map[string]mode.Mode
+	hostConfig  *runconfig.HostConfig
 
 	activeLinks        map[string]*links.Link
 	monitor            *containerMonitor
@@ -237,6 +243,12 @@ func populateCommand(c *Container, env []string) error {
 			return err
 		}
 		en.ContainerID = nc.ID
+	case "ns":
+		ns, err := c.getNetNs()
+		if err != nil {
+			return err
+		}
+		en.NetNs = ns
 	default:
 		return fmt.Errorf("invalid network mode: %s", c.hostConfig.NetworkMode)
 	}
@@ -276,11 +288,34 @@ func populateCommand(c *Container, env []string) error {
 		return err
 	}
 
+	var rlimits []*ulimit.Rlimit
+	ulimits := c.hostConfig.Ulimits
+
+	// Merge ulimits with daemon defaults
+	ulIdx := make(map[string]*ulimit.Ulimit)
+	for _, ul := range ulimits {
+		ulIdx[ul.Name] = ul
+	}
+	for name, ul := range c.daemon.config.Ulimits {
+		if _, exists := ulIdx[name]; !exists {
+			ulimits = append(ulimits, ul)
+		}
+	}
+
+	for _, limit := range ulimits {
+		rl, err := limit.GetRlimit()
+		if err != nil {
+			return err
+		}
+		rlimits = append(rlimits, rl)
+	}
+
 	resources := &execdriver.Resources{
 		Memory:     c.Config.Memory,
 		MemorySwap: c.Config.MemorySwap,
 		CpuShares:  c.Config.CpuShares,
 		Cpuset:     c.Config.Cpuset,
+		Rlimits:    rlimits,
 	}
 
 	processConfig := execdriver.ProcessConfig{
@@ -367,11 +402,30 @@ func (container *Container) Start() (err error) {
 	if err := populateCommand(container, env); err != nil {
 		return err
 	}
+	if err := container.setupSecretFiles(); err != nil {
+		return err
+	}
 	if err := container.setupMounts(); err != nil {
 		return err
 	}
 
-	return container.waitForStart()
+	if err := container.waitForStart(); err != nil {
+		return err
+	}
+
+	container.registerMachine()
+
+	// Now the container is running, unmount the secrets on the host
+	secretsPath, err := container.secretsPath()
+	if err != nil {
+		return err
+	}
+
+	if err := syscall.Unmount(secretsPath, syscall.MNT_DETACH); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (container *Container) Run() error {
@@ -559,6 +613,7 @@ func (container *Container) AllocateNetwork() error {
 	container.NetworkSettings.IPPrefixLen = env.GetInt("IPPrefixLen")
 	container.NetworkSettings.MacAddress = env.Get("MacAddress")
 	container.NetworkSettings.Gateway = env.Get("Gateway")
+	container.NetworkSettings.NetNs = env.Get("NetNs")
 	container.NetworkSettings.LinkLocalIPv6Address = env.Get("LinkLocalIPv6")
 	container.NetworkSettings.LinkLocalIPv6PrefixLen = 64
 	container.NetworkSettings.GlobalIPv6Address = env.Get("GlobalIPv6")
@@ -622,6 +677,15 @@ func (container *Container) cleanup() {
 		for _, link := range container.activeLinks {
 			link.Disable()
 		}
+	}
+
+	// Ignore errors here as it may not be mounted anymore
+	if container.hostConfig.MountRun {
+		path, err := container.runPath()
+		if err != nil {
+			log.Errorf("%v: Failed to umount /run filesystem: %v", container.ID, err)
+		}
+		syscall.Unmount(path, syscall.MNT_DETACH)
 	}
 
 	if err := container.Unmount(); err != nil {
@@ -840,12 +904,20 @@ func (container *Container) ReadLog(name string) (io.Reader, error) {
 	return os.Open(pth)
 }
 
+func (container *Container) runPath() (string, error) {
+	return container.getRootResourcePath("run")
+}
+
 func (container *Container) hostConfigPath() (string, error) {
 	return container.getRootResourcePath("hostconfig.json")
 }
 
 func (container *Container) jsonPath() (string, error) {
 	return container.getRootResourcePath("config.json")
+}
+
+func (container *Container) secretsPath() (string, error) {
+	return container.getRootResourcePath("secrets")
 }
 
 // This method must be exported to be used from the lxc template
@@ -885,7 +957,7 @@ func (container *Container) GetSize() (int64, int64) {
 	}
 
 	if _, err = os.Stat(container.basefs); err != nil {
-		if sizeRootfs, err = utils.TreeSize(container.basefs); err != nil {
+		if sizeRootfs, err = directory.Size(container.basefs); err != nil {
 			sizeRootfs = -1
 		}
 	}
@@ -1221,6 +1293,31 @@ func (container *Container) verifyDaemonSettings() {
 	}
 }
 
+func (container *Container) setupSecretFiles() error {
+	secretsPath, err := container.secretsPath()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(secretsPath, 0700); err != nil {
+		return err
+	}
+
+	if err := syscall.Mount("tmpfs", secretsPath, "tmpfs", uintptr(syscall.MS_NOEXEC|syscall.MS_NOSUID|syscall.MS_NODEV), label.FormatMountLabel("", container.GetMountLabel())); err != nil {
+		return fmt.Errorf("mounting secret tmpfs: %s", err)
+	}
+
+	data, err := getHostSecretData()
+	if err != nil {
+		return err
+	}
+	for _, s := range data {
+		s.SaveTo(secretsPath)
+	}
+
+	return nil
+}
+
 func (container *Container) setupLinkedContainers() ([]string, error) {
 	var (
 		env    []string
@@ -1235,7 +1332,7 @@ func (container *Container) setupLinkedContainers() ([]string, error) {
 		container.activeLinks = make(map[string]*links.Link, len(children))
 
 		// If we encounter an error make sure that we rollback any network
-		// config and ip table changes
+		// config and iptables changes
 		rollback := func() {
 			for _, link := range container.activeLinks {
 				link.Disable()
@@ -1297,6 +1394,7 @@ func (container *Container) createDaemonEnvironment(linkedEnv []string) []string
 	// because the env on the container can override certain default values
 	// we need to replace the 'env' keys where they match and append anything
 	// else.
+	env = append(env, fmt.Sprintf("container_uuid=%s", convertUUID(container.ID)))
 	env = utils.ReplaceOrAppendEnvValues(env, container.Config.Env)
 
 	return env
@@ -1440,6 +1538,27 @@ func (container *Container) getNetworkedContainer() (*Container, error) {
 	}
 }
 
+func (container *Container) getNetNs() (string, error) {
+	parts := strings.SplitN(string(container.hostConfig.NetworkMode), ":", 2)
+	switch parts[0] {
+	case "ns":
+		nc := parts[1]
+		if nc == "" {
+			return "", fmt.Errorf("no network namespace specified")
+		}
+		return nc, nil
+	default:
+		return "", fmt.Errorf("network mode not set to ns")
+	}
+}
+
 func (container *Container) Stats() (*execdriver.ResourceStats, error) {
 	return container.daemon.Stats(container)
+}
+
+func (container *Container) registerMachine() {
+	err := systemd.RegisterMachine(container.Name[1:], container.ID, container.Pid, container.root)
+	if err != nil {
+		log.Errorf("Unable to Register Machine: %s", err)
+	}
 }

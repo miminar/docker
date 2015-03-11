@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/docker/docker/api"
 	"github.com/docker/docker/builder/command"
 	"github.com/docker/docker/builder/parser"
 	"github.com/docker/docker/daemon"
@@ -61,6 +62,7 @@ var evaluateTable map[string]func(*Builder, []string, map[string]bool, string) e
 func init() {
 	evaluateTable = map[string]func(*Builder, []string, map[string]bool, string) error{
 		command.Env:        env,
+		command.Label:      label,
 		command.Maintainer: maintainer,
 		command.Add:        add,
 		command.Copy:       dispatchCopy, // copy() is a go builtin
@@ -90,11 +92,17 @@ type Builder struct {
 
 	Verbose      bool
 	UtilizeCache bool
+	cacheBusted  bool
 
 	// controls how images and containers are handled between steps.
 	Remove      bool
 	ForceRemove bool
 	Pull        bool
+
+	// set this to true if we want the builder to not commit between steps.
+	// This is useful when we only want to use the evaluator table to generate
+	// the final configs of the Dockerfile but dont want the layers
+	disableCommit bool
 
 	AuthConfig     *registry.AuthConfig
 	AuthConfigFile *registry.ConfigFile
@@ -103,7 +111,8 @@ type Builder struct {
 	OutOld          io.Writer
 	StreamFormatter *utils.StreamFormatter
 
-	Config *runconfig.Config // runconfig for cmd, run, entrypoint etc.
+	Config     *runconfig.Config // runconfig for cmd, run, entrypoint etc.
+	HostConfig *runconfig.HostConfig
 
 	// both of these are controlled by the Remove and ForceRemove options in BuildOpts
 	TmpContainers map[string]struct{} // a map of containers used for removes
@@ -141,12 +150,13 @@ func (b *Builder) Run(context io.Reader) (string, error) {
 		}
 	}()
 
-	if err := b.readDockerfile(b.dockerfileName); err != nil {
+	if err := b.readDockerfile(); err != nil {
 		return "", err
 	}
 
 	// some initializations that would not have been supplied by the caller.
 	b.Config = &runconfig.Config{}
+	b.HostConfig = &runconfig.HostConfig{}
 	b.TmpContainers = map[string]struct{}{}
 
 	for i, n := range b.dockerfile.Children {
@@ -172,7 +182,23 @@ func (b *Builder) Run(context io.Reader) (string, error) {
 
 // Reads a Dockerfile from the current context. It assumes that the
 // 'filename' is a relative path from the root of the context
-func (b *Builder) readDockerfile(origFile string) error {
+func (b *Builder) readDockerfile() error {
+	// If no -f was specified then look for 'Dockerfile'. If we can't find
+	// that then look for 'dockerfile'.  If neither are found then default
+	// back to 'Dockerfile' and use that in the error message.
+	if b.dockerfileName == "" {
+		b.dockerfileName = api.DefaultDockerfileName
+		tmpFN := filepath.Join(b.contextPath, api.DefaultDockerfileName)
+		if _, err := os.Lstat(tmpFN); err != nil {
+			tmpFN = filepath.Join(b.contextPath, strings.ToLower(api.DefaultDockerfileName))
+			if _, err := os.Lstat(tmpFN); err == nil {
+				b.dockerfileName = strings.ToLower(api.DefaultDockerfileName)
+			}
+		}
+	}
+
+	origFile := b.dockerfileName
+
 	filename, err := symlink.FollowSymlinkInScope(filepath.Join(b.contextPath, origFile), b.contextPath)
 	if err != nil {
 		return fmt.Errorf("The Dockerfile (%s) must be within the build context", origFile)

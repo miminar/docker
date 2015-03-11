@@ -33,6 +33,7 @@ import (
 	"github.com/docker/docker/pkg/tarsum"
 	"github.com/docker/docker/pkg/urlutil"
 	"github.com/docker/docker/registry"
+	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
 )
 
@@ -60,6 +61,9 @@ func (b *Builder) readContext(context io.Reader) error {
 }
 
 func (b *Builder) commit(id string, autoCmd []string, comment string) error {
+	if b.disableCommit {
+		return nil
+	}
 	if b.image == "" && !b.noBaseImage {
 		return fmt.Errorf("Please provide a source image with `from` prior to commit")
 	}
@@ -184,15 +188,16 @@ func (b *Builder) runContextCommand(args []string, allowRemote bool, allowDecomp
 	if err != nil {
 		return err
 	}
-	// If we do not have at least one hash, never use the cache
-	if hit && b.UtilizeCache {
+
+	if hit {
 		return nil
 	}
 
-	container, _, err := b.Daemon.Create(b.Config, nil, "")
+	container, _, err := b.Daemon.Create(b.Config, b.HostConfig, "")
 	if err != nil {
 		return err
 	}
+	container.SetHostConfig(&runconfig.HostConfig{MountRun: false})
 	b.TmpContainers[container.ID] = struct{}{}
 
 	if err := container.Mount(); err != nil {
@@ -441,6 +446,13 @@ func (b *Builder) pullImage(name string) (*imagepkg.Image, error) {
 	}
 	image, err := b.Daemon.Repositories().LookupImage(name)
 	if err != nil {
+		if !registry.RepositoryNameHasIndex(name) {
+			// repository has been probably renamed to docker.io/<name>
+			qualifiedName := registry.INDEXNAME + "/" + name
+			if image, err = b.Daemon.Repositories().LookupImage(qualifiedName); err == nil {
+				return image, nil
+			}
+		}
 		return nil, err
 	}
 
@@ -499,19 +511,24 @@ func (b *Builder) processImageFrom(img *imagepkg.Image) error {
 // `(true, nil)`. If no image is found, it returns `(false, nil)`. If there
 // is any error, it returns `(false, err)`.
 func (b *Builder) probeCache() (bool, error) {
-	if b.UtilizeCache {
-		if cache, err := b.Daemon.ImageGetCached(b.image, b.Config); err != nil {
-			return false, err
-		} else if cache != nil {
-			fmt.Fprintf(b.OutStream, " ---> Using cache\n")
-			log.Debugf("[BUILDER] Use cached version")
-			b.image = cache.ID
-			return true, nil
-		} else {
-			log.Debugf("[BUILDER] Cache miss")
-		}
+	if !b.UtilizeCache || b.cacheBusted {
+		return false, nil
 	}
-	return false, nil
+
+	cache, err := b.Daemon.ImageGetCached(b.image, b.Config)
+	if err != nil {
+		return false, err
+	}
+	if cache == nil {
+		log.Debugf("[BUILDER] Cache miss")
+		b.cacheBusted = true
+		return false, nil
+	}
+
+	fmt.Fprintf(b.OutStream, " ---> Using cache\n")
+	log.Debugf("[BUILDER] Use cached version")
+	b.image = cache.ID
+	return true, nil
 }
 
 func (b *Builder) create() (*daemon.Container, error) {
@@ -523,7 +540,7 @@ func (b *Builder) create() (*daemon.Container, error) {
 	config := *b.Config
 
 	// Create the container
-	c, warnings, err := b.Daemon.Create(b.Config, nil, "")
+	c, warnings, err := b.Daemon.Create(b.Config, b.HostConfig, "")
 	if err != nil {
 		return nil, err
 	}

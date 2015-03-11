@@ -107,11 +107,11 @@ images.
 
 ### Environment Replacement
 
-**Note:** prior to 1.3, `Dockerfile` environment variables were handled
-similarly, in that they would be replaced as described below. However, there
-was no formal definition on as to which instructions handled environment
-replacement at the time. After 1.3 this behavior will be preserved and
-canonical.
+> **Note**: prior to 1.3, `Dockerfile` environment variables were handled
+> similarly, in that they would be replaced as described below. However, there
+> was no formal definition on as to which instructions handled environment
+> replacement at the time. After 1.3 this behavior will be preserved and
+> canonical.
 
 Environment variables (declared with [the `ENV` statement](#env)) can also be used in
 certain instructions as variables to be interpreted by the `Dockerfile`. Escapes
@@ -328,6 +328,17 @@ default specified in `CMD`.
 > the result; `CMD` does not execute anything at build time, but specifies
 > the intended command for the image.
 
+## LABEL
+   LABEL <key>=<value> <key>=<value> <key>=<value> ...
+
+ --The `LABEL` instruction allows you to describe the image your `Dockerfile`
+is building. `LABEL` is specified as name value pairs. This data can
+be retrieved using the `docker inspect` command
+
+
+    LABEL Description="This image is used to start the foobar executable" Vendor="ACME Products"
+    LABEL Version="1.0"
+
 ## EXPOSE
 
     EXPOSE <port> [<port>...]
@@ -337,11 +348,12 @@ specified network ports at runtime. Docker uses this information to interconnect
 containers using links (see the [Docker User
 Guide](/userguide/dockerlinks)) and to determine which ports to expose to the
 host when [using the -P flag](/reference/run/#expose-incoming-ports).
-**Note:**
-`EXPOSE` doesn't define which ports can be exposed to the host or make ports
-accessible from the host by default. To expose ports to the host, at runtime, 
-[use the `-p` flag](/userguide/dockerlinks) or
-[the -P flag](/reference/run/#expose-incoming-ports).
+
+> **Note**:
+> `EXPOSE` doesn't define which ports can be exposed to the host or make ports
+> accessible from the host by default. To expose ports to the host, at runtime,
+> [use the `-p` flag](/userguide/dockerlinks) or
+> [the -P flag](/reference/run/#expose-incoming-ports).
 
 ## ENV
 
@@ -776,13 +788,27 @@ If you then run `docker stop test`, the container will not exit cleanly - the
 
     VOLUME ["/data"]
 
-The `VOLUME` instruction will create a mount point with the specified name
-and mark it as holding externally mounted volumes from native host or other
+The `VOLUME` instruction creates a mount point with the specified name
+and marks it as holding externally mounted volumes from native host or other
 containers. The value can be a JSON array, `VOLUME ["/var/log/"]`, or a plain
 string with multiple arguments, such as `VOLUME /var/log` or `VOLUME /var/log
 /var/db`.  For more information/examples and mounting instructions via the
-Docker client, refer to [*Share Directories via Volumes*](/userguide/dockervolumes/#volume)
+Docker client, refer to 
+[*Share Directories via Volumes*](/userguide/dockervolumes/#volume)
 documentation.
+
+The `docker run` command initializes the newly created volume with any data 
+that exists at the specified location within the base image. For example, 
+consider the following Dockerfile snippet:
+
+    FROM ubuntu
+    RUN mkdir /myvol
+    RUN echo "hello world" > /myvol/greating
+    VOLUME /myvol
+
+This Dockerfile results in an image that causes `docker run`, to
+create a new mount point at `/myvol` and copy the  `greating` file 
+into the newly created volume.
 
 > **Note**:
 > The list is parsed as a JSON array, which means that
@@ -892,6 +918,7 @@ For example you might add something like this:
     FROM      ubuntu
     MAINTAINER Victor Vieux <victor@docker.com>
 
+    LABEL Description="This image is used to start the foobar executable" Vendor="ACME Products" Version="1.0"
     RUN apt-get update && apt-get install -y inotify-tools nginx apache2 openssh-server
 
     # Firefox over VNC

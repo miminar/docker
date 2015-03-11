@@ -109,7 +109,7 @@ Finally, several networking options can only be provided when calling
     [Configuring DNS](#dns) and
     [Communication between containers](#between-containers)
 
- *  `--net=bridge|none|container:NAME_or_ID|host` — see
+ *  `--net=bridge|none|container:NAME_or_ID|host|ns:PATH` — see
     [How Docker networks a container](#container-networking)
 
  *  `--mac-address=MACADDRESS...` — see
@@ -189,6 +189,13 @@ the `/etc/resolv.conf` of the host machine where the `docker` daemon is
 running.  You might wonder what happens when the host machine's
 `/etc/resolv.conf` file changes.  The `docker` daemon has a file change
 notifier active which will watch for changes to the host DNS configuration.
+
+> **Note**:
+> The file change notifier relies on the Linux kernel's inotify feature.
+> Because this feature is currently incompatible with the overlay filesystem 
+> driver, a Docker daemon using "overlay" will not be able to take advantage
+> of the `/etc/resolv.conf` auto-update feature.
+
 When the host file changes, all stopped containers which have a matching
 `resolv.conf` to the host will be updated immediately to this newest host
 configuration.  Containers which are running when the host configuration
@@ -495,6 +502,67 @@ to `2001:db8:23:42:0:ffff:ffff:ffff` is attached to `eth0`, with the host listen
 at `2001:db8:23:42::1`. The subnet `2001:db8:23:42:1::/80` with an address range from
 `2001:db8:23:42:1:0:0:0` to `2001:db8:23:42:1:ffff:ffff:ffff` is attached to
 `docker0` and will be used by containers.
+
+#### Using NDP proxying
+
+If your Docker host is only part of an IPv6 subnet but has not got an IPv6
+subnet assigned you can use NDP proxying to connect your containers via IPv6 to
+the internet.
+For example your host has the IPv6 address `2001:db8::c001`, is part of the
+subnet `2001:db8::/64` and your IaaS provider allows you to configure the IPv6
+addresses `2001:db8::c000` to `2001:db8::c00f`:
+
+    $ ip -6 addr show
+    1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536
+        inet6 ::1/128 scope host
+           valid_lft forever preferred_lft forever
+    2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qlen 1000
+        inet6 2001:db8::c001/64 scope global
+           valid_lft forever preferred_lft forever
+        inet6 fe80::601:3fff:fea1:9c01/64 scope link
+           valid_lft forever preferred_lft forever
+
+Let's split up the configurable address range into two subnets
+`2001:db8::c000/125` and `2001:db8::c008/125`. The first one can be used by the
+host itself, the latter by Docker:
+
+    docker -d --ipv6 --fixed-cidr-v6 2001:db8::c008/125
+
+You notice the Docker subnet is within the subnet managed by your router that
+is connected to `eth0`. This means all devices (containers) with the addresses
+from the Docker subnet are expected to be found within the router subnet.
+Therefore the router thinks it can talk to these containers directly.
+
+![](/article-img/ipv6_ndp_proxying.svg)
+
+As soon as the router wants to send an IPv6 packet to the first container it
+will transmit a neighbor solicitation request, asking, who has
+`2001:db8::c009`? But it will get no answer because noone on this subnet has
+this address. The container with this address is hidden behind the Docker host.
+The Docker host has to listen to neighbor solication requests for the container
+address and send a response that itself is the device that is responsible for
+the address. This is done by a Kernel feature called `NDP Proxy`. You can
+enable it by executing
+
+    $ sysctl net.ipv6.conf.eth0.proxy_ndp=1
+
+Now you can add the container's IPv6 address to the NDP proxy table:
+
+    $ ip -6 neigh add proxy 2001:db8::c009 dev eth0
+
+This command tells the Kernel to answer to incoming neighbor solicitation requests
+regarding the IPv6 address `2001:db8::c009` on the device `eth0`. As a
+consequence of this all traffic to this IPv6 address will go into the Docker
+host and it will forward it according to its routing table via the `docker0`
+device to the container network:
+
+    $ ip -6 route show
+    2001:db8::c008/125 dev docker0  metric 1
+    2001:db8::/64 dev eth0  proto kernel  metric 256
+
+You have to execute the `ip -6 neigh add proxy ...` command for every IPv6
+address in your Docker subnet. Unfortunately there is no functionality for
+adding a whole subnet by executing one command.
 
 ### Docker IPv6 Cluster
 
@@ -812,6 +880,13 @@ values.
     first container, and processes on the two containers will be able to
     connect to each other over the loopback interface.
 
+ * `--net=ns:PATH` — Tells Docker to put the container inside of
+    the network namespace specified by the PATH. This allows you to
+    specify a network environment before starting your Docker
+    container, giving you complete flexibility over how the network is
+    set up. For example, you could use this to run containers in
+    different vxlan ids.
+
  *  `--net=none` — Tells Docker to put the container inside of its own
     network stack but not to take any steps to configure its network,
     leaving you free to build any of the custom configurations explored
@@ -888,6 +963,41 @@ part of safe containerization is that Docker strips container processes
 of the right to configure their own networks.  Using `ip netns exec` is
 what let us finish up the configuration without having to take the
 dangerous step of running the container itself with `--privileged=true`.
+
+The above can also be implemented with `--net=ns`.
+
+    # create a namespace entry in /var/run/netns/
+    # for the "ip netns" command we will be using below
+
+    $ sudo ip netns add myns
+
+    # Check the bridge's IP address and netmask
+
+    $ ip addr show docker0
+    21: docker0: ...
+    inet 172.17.42.1/16 scope global docker0
+    ...
+
+    # Create a pair of "peer" interfaces A and B,
+    # bind the A end to the bridge, and bring it up
+
+    $ sudo ip link add A type veth peer name B
+    $ sudo brctl addif docker0 A
+    $ sudo ip link set A up
+
+    # Place B inside the network namespace,
+    # rename to eth0, and activate it with a free IP
+
+    $ sudo ip link set B netns myns
+    $ sudo ip netns exec myns ip link set dev B name eth0
+    $ sudo ip netns exec myns ip link set eth0 up
+    $ sudo ip netns exec myns ip addr add 172.17.42.99/16 dev eth0
+    $ sudo ip netns exec myns ip route add default via 172.17.42.1
+    $ sudo ip netns exec myns ip link set lo up
+
+    $ sudo docker run -i -t --rm --net=ns:/var/run/netns/myns base /bin/bash
+    root@63f36fc01b5f:/#
+
 
 ## Tools and Examples
 

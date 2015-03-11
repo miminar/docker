@@ -51,6 +51,18 @@ You can still call an old version of the API using
 **New!**
 This endpoint now returns `Os`, `Arch` and `KernelVersion`.
 
+`POST /containers/create`
+`POST /containers/(id)/start`
+
+**New!**
+You can set ulimit settings to be used within the container.
+
+`Get /info`
+
+**New!**
+Add return value `HttpProxy`,`HttpsProxy` and `NoProxy` to this entrypoint.
+
+
 ## v1.17
 
 ### Full Documentation
@@ -59,6 +71,13 @@ This endpoint now returns `Os`, `Arch` and `KernelVersion`.
 
 ### What's new
 
+**New!**
+Build now has support for `LABEL` command which can be used to add user data
+to an image.  For example you could add data describing the content of an image.
+
+`LABEL "Vendor"="ACME Incorporated"`
+
+**New!**
 `POST /containers/(id)/attach` and `POST /exec/(id)/start`
 
 **New!**
@@ -85,9 +104,6 @@ root filesystem as read only.
 
 **New!**
 This endpoint returns a live stream of a container's resource usage statistics.
-
-> **Note**: this functionality currently only works when using the *libcontainer* exec-driver.
-
 
 ## v1.16
 

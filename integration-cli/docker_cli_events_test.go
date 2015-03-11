@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,8 +16,11 @@ func TestEventsUntag(t *testing.T) {
 	dockerCmd(t, "tag", image, "utest:tag2")
 	dockerCmd(t, "rmi", "utest:tag1")
 	dockerCmd(t, "rmi", "utest:tag2")
-	eventsCmd := exec.Command("timeout", "0.2", dockerBinary, "events", "--since=1")
-	out, _, _ := runCommandWithOutput(eventsCmd)
+	eventsCmd := exec.Command(dockerBinary, "events", "--since=1")
+	out, exitCode, _, err := runCommandWithOutputForDuration(eventsCmd, time.Duration(time.Millisecond*200))
+	if exitCode != 0 || err != nil {
+		t.Fatalf("Failed to get events - exit code %d: %s", exitCode, err)
+	}
 	events := strings.Split(out, "\n")
 	nEvents := len(events)
 	// The last element after the split above will be an empty string, so we
@@ -35,7 +39,7 @@ func TestEventsContainerFailStartDie(t *testing.T) {
 
 	out, _, _ := dockerCmd(t, "images", "-q")
 	image := strings.Split(out, "\n")[0]
-	eventsCmd := exec.Command(dockerBinary, "run", "-d", "--name", "testeventdie", image, "blerg")
+	eventsCmd := exec.Command(dockerBinary, "run", "--name", "testeventdie", image, "blerg")
 	_, _, err := runCommandWithOutput(eventsCmd)
 	if err == nil {
 		t.Fatalf("Container run with command blerg should have failed, but it did not")
@@ -203,69 +207,88 @@ func TestEventsImageImport(t *testing.T) {
 }
 
 func TestEventsFilters(t *testing.T) {
-	// we need a new daemon here
-	// otherwise events picks up the container from the previous
-	// function as a die event (some sort of race)
-	// I am not proud of this - jessfraz
-	d := NewDaemon(t)
-	if err := d.StartWithBusybox(); err != nil {
-		t.Fatalf("Could not start daemon with busybox: %v", err)
+	parseEvents := func(out, match string) {
+		events := strings.Split(out, "\n")
+		events = events[:len(events)-1]
+		for _, event := range events {
+			eventFields := strings.Fields(event)
+			eventName := eventFields[len(eventFields)-1]
+			if ok, err := regexp.MatchString(match, eventName); err != nil || !ok {
+				t.Fatalf("event should match %s, got %#v, err: %v", match, eventFields, err)
+			}
+		}
 	}
-	defer d.Stop()
 
 	since := time.Now().Unix()
-	out, err := d.Cmd("run", "--rm", "busybox", "true")
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", "--rm", "busybox", "true"))
 	if err != nil {
 		t.Fatal(out, err)
 	}
-	out, err = d.Cmd("run", "--rm", "busybox", "true")
+	out, _, err = runCommandWithOutput(exec.Command(dockerBinary, "run", "--rm", "busybox", "true"))
 	if err != nil {
 		t.Fatal(out, err)
 	}
-	out, err = d.Cmd("events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", time.Now().Unix()), "--filter", "event=die")
+	out, _, err = runCommandWithOutput(exec.Command(dockerBinary, "events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", time.Now().Unix()), "--filter", "event=die"))
 	if err != nil {
 		t.Fatalf("Failed to get events: %s", err)
 	}
-	events := strings.Split(out, "\n")
-	events = events[:len(events)-1]
-	if len(events) != 2 {
-		t.Fatalf("Expected 2 events, got %d: %v", len(events), events)
-	}
-	dieEvent := strings.Fields(events[len(events)-1])
-	if dieEvent[len(dieEvent)-1] != "die" {
-		t.Fatalf("event should be die, not %#v", dieEvent)
-	}
+	parseEvents(out, "die")
 
-	dieEvent = strings.Fields(events[len(events)-2])
-	if dieEvent[len(dieEvent)-1] != "die" {
-		t.Fatalf("event should be die, not %#v", dieEvent)
-	}
-
-	out, err = d.Cmd("events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", time.Now().Unix()), "--filter", "event=die", "--filter", "event=start")
+	out, _, err = runCommandWithOutput(exec.Command(dockerBinary, "events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", time.Now().Unix()), "--filter", "event=die", "--filter", "event=start"))
 	if err != nil {
 		t.Fatalf("Failed to get events: %s", err)
 	}
-	events = strings.Split(out, "\n")
-	events = events[:len(events)-1]
-	if len(events) != 4 {
-		t.Fatalf("Expected 4 events, got %d: %v", len(events), events)
-	}
-	startEvent := strings.Fields(events[len(events)-4])
-	if startEvent[len(startEvent)-1] != "start" {
-		t.Fatalf("event should be start, not %#v", startEvent)
-	}
-	dieEvent = strings.Fields(events[len(events)-3])
-	if dieEvent[len(dieEvent)-1] != "die" {
-		t.Fatalf("event should be die, not %#v", dieEvent)
-	}
-	startEvent = strings.Fields(events[len(events)-2])
-	if startEvent[len(startEvent)-1] != "start" {
-		t.Fatalf("event should be start, not %#v", startEvent)
-	}
-	dieEvent = strings.Fields(events[len(events)-1])
-	if dieEvent[len(dieEvent)-1] != "die" {
-		t.Fatalf("event should be die, not %#v", dieEvent)
+	parseEvents(out, "((die)|(start))")
+
+	// make sure we at least got 2 start events
+	count := strings.Count(out, "start")
+	if count < 2 {
+		t.Fatalf("should have had 2 start events but had %d, out: %s", count, out)
 	}
 
 	logDone("events - filters")
+}
+
+func TestEventsFilterImageName(t *testing.T) {
+	since := time.Now().Unix()
+	defer deleteAllContainers()
+
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", "--name", "container_1", "-d", "busybox", "true"))
+	if err != nil {
+		t.Fatal(out, err)
+	}
+	container1 := stripTrailingCharacters(out)
+	out, _, err = runCommandWithOutput(exec.Command(dockerBinary, "run", "--name", "container_2", "-d", "busybox", "true"))
+	if err != nil {
+		t.Fatal(out, err)
+	}
+	container2 := stripTrailingCharacters(out)
+
+	for _, s := range []string{"busybox", "busybox:latest"} {
+		eventsCmd := exec.Command(dockerBinary, "events", fmt.Sprintf("--since=%d", since), fmt.Sprintf("--until=%d", time.Now().Unix()), "--filter", fmt.Sprintf("image=%s", s))
+		out, _, err := runCommandWithOutput(eventsCmd)
+		if err != nil {
+			t.Fatalf("Failed to get events, error: %s(%s)", err, out)
+		}
+		events := strings.Split(out, "\n")
+		events = events[:len(events)-1]
+		if len(events) == 0 {
+			t.Fatalf("Expected events but found none for the image busybox:latest")
+		}
+		count1 := 0
+		count2 := 0
+		for _, e := range events {
+			if strings.Contains(e, container1) {
+				count1++
+			} else if strings.Contains(e, container2) {
+				count2++
+			}
+		}
+		if count1 == 0 || count2 == 0 {
+			t.Fatalf("Expected events from each container but got %d from %s and %d from %s", count1, container1, count2, container2)
+		}
+	}
+
+	logDone("events - filters using image")
+
 }

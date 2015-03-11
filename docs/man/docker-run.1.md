@@ -145,6 +145,9 @@ is the case the **--dns** flags is necessary for every run.
 environment variables that are available for the process that will be launched
 inside of the container.
 
+   container_uuid is set automatically with a 32 character truncated Container ID
+in standard UUID format.
+
 **--entrypoint**=""
    Overwrite the default ENTRYPOINT of the image
 
@@ -237,6 +240,7 @@ and foreground Docker containers.
                                'none': no networking for this container
                                'container:<name|id>': reuses another container network stack
                                'host': use the host network stack inside the container.  Note: the host mode gives the container full access to local system services such as D-bus and is therefore considered insecure.
+                               'ns:<path>': use the specified network namespace
 
 **-P**, **--publish-all**=*true*|*false*
    Publish all exposed ports to random ports on the host interfaces. The default is *false*.
@@ -318,23 +322,40 @@ standard input.
 more times to add one or more mounts to a container. These mounts can then be
 used in other containers using the **--volumes-from** option.
 
-   The volume may be optionally suffixed with :ro or :rw to mount the volumes in
+   The volume may be optionally suffixed with :r or :w to mount the volumes in
 read-only or read-write mode, respectively. By default, the volumes are mounted
 read-write. See examples.
+
+Labeling systems like SELinux require proper labels be placed on volume content
+mounted into a container, otherwise the secuirty system might prevent the
+processes running inside the container from using the content. By default,
+volumes are not relabeled.
+
+Two suffixes :z or :Z can be added to the volume mount. These suffixes tell
+Docker to relabel file objects on the shared volumes. The 'z' option tells
+Docker that the volume content will be shared between containers. Docker will
+label the content with a shared content label. Shared volumes labels allow all
+containers to read/write content. The 'Z' option tells Docker to label the
+content with a private unshared label. Private volumes can only be used by the
+current container.
 
 **--volumes-from**=[]
    Mount volumes from the specified container(s)
 
-   Will mount volumes from the specified container identified by container-id.
-Once a volume is mounted in a one container it can be shared with other
-containers using the **--volumes-from** option when running those other
-containers. The volumes can be shared even if the original container with the
-mount is not running.
+   Mounts already mounted volumes from a source container onto another
+   container. You must supply the source's container-id. To share 
+   a volume, use the **--volumes-from** option when running
+   the target container. You can share volumes even if the source container 
+   is not running.
 
-   The container ID may be optionally suffixed with :ro or
-:rw to mount the volumes in read-only or read-write mode, respectively. By
-default, the volumes are mounted in the same mode (read write or read only) as
-the reference container.
+   By default, Docker mounts the volumes in the same mode (read-write or 
+   read-only) as it is mounted in the source container. Optionally, you 
+   can change this by suffixing the container-id with either the `:r` or 
+   `:w ` keyword.
+
+   If the location of the volume from the source container overlaps with
+   data residing on a target container, then the volume hides
+   that data on the target.
 
 **-w**, **--workdir**=""
    Working directory inside the container
@@ -456,6 +477,7 @@ Running the **env** command in the linker container shows environment variables
  with the LT (alias) context (**LT_**)
 
     # env
+    container_uuid=be84194d-87f9-08c2-b2e1-67311f4409f5
     HOSTNAME=668231cb0978
     TERM=xterm
     LT_PORT_80_TCP=tcp://172.17.0.3:80

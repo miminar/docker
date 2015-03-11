@@ -433,7 +433,7 @@ func TestRunWithRelativePath(t *testing.T) {
 func TestRunVolumesMountedAsReadonly(t *testing.T) {
 	defer deleteAllContainers()
 
-	cmd := exec.Command(dockerBinary, "run", "-v", "/test:/test:ro", "busybox", "touch", "/test/somefile")
+	cmd := exec.Command(dockerBinary, "run", "-v", "/test:/test:r", "busybox", "touch", "/test/somefile")
 	if code, err := runCommand(cmd); err == nil || code == 0 {
 		t.Fatalf("run should fail because volume is ro: exit code %d", code)
 	}
@@ -448,7 +448,7 @@ func TestRunVolumesFromInReadonlyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:ro", "busybox", "touch", "/test/file")
+	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:r", "busybox", "touch", "/test/file")
 	if code, err := runCommand(cmd); err == nil || code == 0 {
 		t.Fatalf("run should fail because volume is ro: exit code %d", code)
 	}
@@ -464,9 +464,9 @@ func TestRunVolumesFromInReadWriteMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:rw", "busybox", "touch", "/test/file")
+	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:W", "busybox", "touch", "/test/file")
 	if out, _, err := runCommandWithOutput(cmd); err != nil {
-		t.Fatalf("running --volumes-from parent:rw failed with output: %q\nerror: %v", out, err)
+		t.Fatalf("running --volumes-from parent:W failed with output: %q\nerror: %v", out, err)
 	}
 
 	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:bar", "busybox", "touch", "/test/file")
@@ -484,22 +484,22 @@ func TestRunVolumesFromInReadWriteMode(t *testing.T) {
 
 func TestVolumesFromGetsProperMode(t *testing.T) {
 	defer deleteAllContainers()
-	cmd := exec.Command(dockerBinary, "run", "--name", "parent", "-v", "/test:/test:ro", "busybox", "true")
+	cmd := exec.Command(dockerBinary, "run", "--name", "parent", "-v", "/test:/test:r", "busybox", "true")
 	if _, err := runCommand(cmd); err != nil {
 		t.Fatal(err)
 	}
 	// Expect this "rw" mode to be be ignored since the inheritted volume is "ro"
-	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:rw", "busybox", "touch", "/test/file")
+	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent:w", "busybox", "touch", "/test/file")
 	if _, err := runCommand(cmd); err == nil {
 		t.Fatal("Expected volumes-from to inherit read-only volume even when passing in `rw`")
 	}
 
-	cmd = exec.Command(dockerBinary, "run", "--name", "parent2", "-v", "/test:/test:ro", "busybox", "true")
+	cmd = exec.Command(dockerBinary, "run", "--name", "parent2", "-v", "/test:/test:r", "busybox", "true")
 	if _, err := runCommand(cmd); err != nil {
 		t.Fatal(err)
 	}
 	// Expect this to be read-only since both are "ro"
-	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent2:ro", "busybox", "touch", "/test/file")
+	cmd = exec.Command(dockerBinary, "run", "--volumes-from", "parent2:r", "busybox", "touch", "/test/file")
 	if _, err := runCommand(cmd); err == nil {
 		t.Fatal("Expected volumes-from to inherit read-only volume even when passing in `ro`")
 	}
@@ -511,20 +511,8 @@ func TestVolumesFromGetsProperMode(t *testing.T) {
 func TestRunNoDupVolumes(t *testing.T) {
 	defer deleteAllContainers()
 
-	bindPath1, err := ioutil.TempDir("", "test1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(bindPath1)
-
-	bindPath2, err := ioutil.TempDir("", "test2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(bindPath2)
-
-	mountstr1 := bindPath1 + ":/someplace"
-	mountstr2 := bindPath2 + ":/someplace"
+	mountstr1 := randomUnixTmpDirPath("test1") + ":/someplace"
+	mountstr2 := randomUnixTmpDirPath("test2") + ":/someplace"
 
 	cmd := exec.Command(dockerBinary, "run", "-v", mountstr1, "-v", mountstr2, "busybox", "true")
 	if out, _, err := runCommandWithOutput(cmd); err == nil {
@@ -860,14 +848,17 @@ func TestRunEnvironment(t *testing.T) {
 		"cky",
 		"",
 		"HOME=/root",
+		"container_uuid=ID",
 	}
 	sort.Strings(goodEnv)
 	if len(goodEnv) != len(actualEnv) {
-		t.Fatalf("Wrong environment: should be %d variables, not: %q\n", len(goodEnv), strings.Join(actualEnv, ", "))
+		t.Fatalf("Wrong environment: should be %d variables, not %d: %q\n", len(goodEnv), len(actualEnv), strings.Join(actualEnv, ", "))
 	}
 	for i := range goodEnv {
 		if actualEnv[i] != goodEnv[i] {
-			t.Fatalf("Wrong environment variable: should be %s, not %s", goodEnv[i], actualEnv[i])
+			if strings.Split(actualEnv[i], "=")[0] != "container_uuid" {
+				t.Fatalf("Wrong environment variable: should be %s, not %s", goodEnv[i], actualEnv[i])
+			}
 		}
 	}
 
@@ -900,14 +891,17 @@ func TestRunEnvironmentErase(t *testing.T) {
 	goodEnv := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
+		"container_uuid=ID",
 	}
 	sort.Strings(goodEnv)
 	if len(goodEnv) != len(actualEnv) {
-		t.Fatalf("Wrong environment: should be %d variables, not: %q\n", len(goodEnv), strings.Join(actualEnv, ", "))
+		t.Fatalf("Wrong environment: should be %d variables, not %d: %q\n", len(goodEnv), len(actualEnv), strings.Join(actualEnv, ", "))
 	}
 	for i := range goodEnv {
 		if actualEnv[i] != goodEnv[i] {
-			t.Fatalf("Wrong environment variable: should be %s, not %s", goodEnv[i], actualEnv[i])
+			if strings.Split(actualEnv[i], "=")[0] != "container_uuid" {
+				t.Fatalf("Wrong environment variable: should be %s, not %s", goodEnv[i], actualEnv[i])
+			}
 		}
 	}
 
@@ -947,7 +941,9 @@ func TestRunEnvironmentOverride(t *testing.T) {
 	}
 	for i := range goodEnv {
 		if actualEnv[i] != goodEnv[i] {
-			t.Fatalf("Wrong environment variable: should be %s, not %s", goodEnv[i], actualEnv[i])
+			if strings.Split(actualEnv[i], "=")[0] != "container_uuid" {
+				t.Fatalf("Wrong environment variable: should be %s, not %s", goodEnv[i], actualEnv[i])
+			}
 		}
 	}
 
@@ -1360,8 +1356,8 @@ func TestRunAddingOptionalDevices(t *testing.T) {
 }
 
 func TestRunModeHostname(t *testing.T) {
-	defer deleteAllContainers()
 	testRequires(t, SameHostDaemon)
+	defer deleteAllContainers()
 
 	cmd := exec.Command(dockerBinary, "run", "-h=testhostname", "busybox", "cat", "/etc/hostname")
 	out, _, err := runCommandWithOutput(cmd)
@@ -1601,7 +1597,9 @@ func TestRunDnsOptionsBasedOnHostResolvConf(t *testing.T) {
 // stopped and have an unmodified copy of resolv.conf, as well as
 // marking running containers as requiring an update on next restart
 func TestRunResolvconfUpdater(t *testing.T) {
-	testRequires(t, SameHostDaemon)
+	// Because overlay doesn't support inotify properly, we need to skip
+	// this test if the docker daemon has Storage Driver == overlay
+	testRequires(t, SameHostDaemon, NotOverlay)
 
 	tmpResolvConf := []byte("search pommesfrites.fr\nnameserver 12.34.56.78")
 	tmpLocalhostResolvConf := []byte("nameserver 127.0.0.1")
@@ -1609,6 +1607,14 @@ func TestRunResolvconfUpdater(t *testing.T) {
 	//take a copy of resolv.conf for restoring after test completes
 	resolvConfSystem, err := ioutil.ReadFile("/etc/resolv.conf")
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	// This test case is meant to test monitoring resolv.conf when it is
+	// a regular file not a bind mount. So we unmount resolv.conf and replace
+	// it with a file containing the original settings.
+	cmd := exec.Command("umount", "/etc/resolv.conf")
+	if _, err = runCommand(cmd); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1621,7 +1627,7 @@ func TestRunResolvconfUpdater(t *testing.T) {
 	}()
 
 	//1. test that a non-running container gets an updated resolv.conf
-	cmd := exec.Command(dockerBinary, "run", "--name='first'", "busybox", "true")
+	cmd = exec.Command(dockerBinary, "run", "--name='first'", "busybox", "true")
 	if _, err := runCommand(cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -1742,6 +1748,45 @@ func TestRunResolvconfUpdater(t *testing.T) {
 	expected := "\nnameserver 8.8.8.8\nnameserver 8.8.4.4"
 	if !bytes.Equal(containerResolv, []byte(expected)) {
 		t.Fatalf("Container does not have cleaned/replaced DNS in resolv.conf; expected %q, got %q", expected, string(containerResolv))
+	}
+
+	//6. Test that replacing (as opposed to modifying) resolv.conf triggers an update
+	//   of containers' resolv.conf.
+
+	// Restore the original resolv.conf
+	if err := ioutil.WriteFile("/etc/resolv.conf", resolvConfSystem, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run the container so it picks up the old settings
+	cmd = exec.Command(dockerBinary, "run", "--name='third'", "busybox", "true")
+	if _, err := runCommand(cmd); err != nil {
+		t.Fatal(err)
+	}
+	containerID3, err := getIDByName("third")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a modified resolv.conf.aside and override resolv.conf with it
+	bytesResolvConf = []byte(tmpResolvConf)
+	if err := ioutil.WriteFile("/etc/resolv.conf.aside", bytesResolvConf, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.Rename("/etc/resolv.conf.aside", "/etc/resolv.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(time.Second / 2)
+	// check for update in container
+	containerResolv, err = readContainerFile(containerID3, "resolv.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(containerResolv, bytesResolvConf) {
+		t.Fatalf("Stopped container does not have updated resolv.conf; expected\n%q\n got\n%q", tmpResolvConf, string(containerResolv))
 	}
 
 	//cleanup, restore original resolv.conf happens in defer func()
@@ -2190,6 +2235,7 @@ func TestRunEntrypoint(t *testing.T) {
 }
 
 func TestRunBindMounts(t *testing.T) {
+	testRequires(t, SameHostDaemon)
 	defer deleteAllContainers()
 
 	tmpDir, err := ioutil.TempDir("", "docker-test-container")
@@ -2201,7 +2247,7 @@ func TestRunBindMounts(t *testing.T) {
 	writeFile(path.Join(tmpDir, "touch-me"), "", t)
 
 	// Test reading from a read-only bind mount
-	cmd := exec.Command(dockerBinary, "run", "-v", fmt.Sprintf("%s:/tmp:ro", tmpDir), "busybox", "ls", "/tmp")
+	cmd := exec.Command(dockerBinary, "run", "-v", fmt.Sprintf("%s:/tmp:r", tmpDir), "busybox", "ls", "/tmp")
 	out, _, err := runCommandWithOutput(cmd)
 	if err != nil {
 		t.Fatal(err, out)
@@ -2211,7 +2257,7 @@ func TestRunBindMounts(t *testing.T) {
 	}
 
 	// test writing to bind mount
-	cmd = exec.Command(dockerBinary, "run", "-v", fmt.Sprintf("%s:/tmp:rw", tmpDir), "busybox", "touch", "/tmp/holla")
+	cmd = exec.Command(dockerBinary, "run", "-v", fmt.Sprintf("%s:/tmp:W", tmpDir), "busybox", "touch", "/tmp/holla")
 	out, _, err = runCommandWithOutput(cmd)
 	if err != nil {
 		t.Fatal(err, out)
@@ -2226,7 +2272,7 @@ func TestRunBindMounts(t *testing.T) {
 	}
 
 	// test mount a file
-	cmd = exec.Command(dockerBinary, "run", "-v", fmt.Sprintf("%s/holla:/tmp/holla:rw", tmpDir), "busybox", "sh", "-c", "echo -n 'yotta' > /tmp/holla")
+	cmd = exec.Command(dockerBinary, "run", "-v", fmt.Sprintf("%s/holla:/tmp/holla:W", tmpDir), "busybox", "sh", "-c", "echo -n 'yotta' > /tmp/holla")
 	_, err = runCommand(cmd)
 	if err != nil {
 		t.Fatal(err, out)
@@ -2251,11 +2297,12 @@ func TestRunCidFileCleanupIfEmpty(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 	tmpCidFile := path.Join(tmpDir, "cid")
-	cmd := exec.Command(dockerBinary, "run", "--cidfile", tmpCidFile, "scratch")
+	cmd := exec.Command(dockerBinary, "run", "--cidfile", tmpCidFile, "emptyfs")
 	out, _, err := runCommandWithOutput(cmd)
-	t.Log(out)
 	if err == nil {
-		t.Fatal("Run without command must fail")
+		t.Fatalf("Run without command must fail. out=%s", out)
+	} else if !strings.Contains(out, "No command specified") {
+		t.Fatalf("Run without command failed with wrong output. out=%s\nerr=%v", out, err)
 	}
 
 	if _, err := os.Stat(tmpCidFile); err == nil {
@@ -2353,6 +2400,57 @@ func TestRunInspectMacAddress(t *testing.T) {
 	}
 
 	logDone("run - inspecting MAC address")
+}
+
+func TestRunNetworkInitializedNetNsMode(t *testing.T) {
+	dir := "/var/run/netns"
+	ns := "myns"
+	p := path.Join(dir, ns)
+	os.Mkdir(dir, 0755)
+
+	cmd_ip_netns := exec.Command("/bin/ip", "netns", "add", ns)
+	out_ip_netns, _, err_ip_netns := runCommandWithOutput(cmd_ip_netns)
+	if err_ip_netns != nil {
+		t.Fatalf("ip netns add failed: %s %s", err_ip_netns, out_ip_netns)
+	}
+
+	cmd := exec.Command(dockerBinary, "run", "-d", "--net=ns:"+p, "busybox", "top")
+	out, _, err := runCommandWithOutput(cmd)
+	if err != nil {
+		t.Fatalf("run failed: %s %s", err, out)
+	}
+	id := strings.TrimSpace(out)
+	res, err := inspectField(id, "NetworkSettings.IPAddress")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == "" {
+		t.Fatal("For 'netns' mode network was not initialized.")
+	}
+
+	deleteAllContainers()
+
+	cmd_ip_netns = exec.Command("/bin/ip", "netns", "delete", ns)
+	out_ip_netns, _, err_ip_netns = runCommandWithOutput(cmd_ip_netns)
+	if err_ip_netns != nil {
+		t.Fatalf("ip netns delete failed: %s %s", err_ip_netns, out_ip_netns)
+	}
+
+	logDone("run - network must be initialized in 'netns' mode")
+}
+
+// test docker run use a invalid mac address
+func TestRunWithInvalidMacAddress(t *testing.T) {
+	defer deleteAllContainers()
+
+	runCmd := exec.Command(dockerBinary, "run", "--mac-address", "92:d0:c6:0a:29", "busybox")
+	out, _, err := runCommandWithOutput(runCmd)
+	//use a invalid mac address should with a error out
+	if err == nil || !strings.Contains(out, "is not a valid mac address") {
+		t.Fatalf("run with an invalid --mac-address should with error out")
+	}
+
+	logDone("run - can't use an invalid mac address")
 }
 
 func TestRunDeallocatePortOnMissingIptablesRule(t *testing.T) {
@@ -2521,7 +2619,7 @@ func TestRunReuseBindVolumeThatIsSymlink(t *testing.T) {
 	logDone("run - can remount old bindmount volume")
 }
 
-//test create /etc volume
+//GH#10604: Test an "/etc" volume doesn't overlay special bind mounts in container
 func TestRunCreateVolumeEtc(t *testing.T) {
 	defer deleteAllContainers()
 
@@ -2531,7 +2629,7 @@ func TestRunCreateVolumeEtc(t *testing.T) {
 		t.Fatal("failed to run container: %v, output: %q", err, out)
 	}
 	if !strings.Contains(out, "nameserver 127.0.0.1") {
-		t.Fatal("failed: create /etc volume cover /etc/resolv.conf")
+		t.Fatal("/etc volume mount hides /etc/resolv.conf")
 	}
 
 	cmd = exec.Command(dockerBinary, "run", "-h=test123", "-v", "/etc", "busybox", "cat", "/etc/hostname")
@@ -2540,7 +2638,7 @@ func TestRunCreateVolumeEtc(t *testing.T) {
 		t.Fatal("failed to run container: %v, output: %q", err, out)
 	}
 	if !strings.Contains(out, "test123") {
-		t.Fatal("failed: create /etc volume cover /etc/hostname")
+		t.Fatal("/etc volume mount hides /etc/hostname")
 	}
 
 	cmd = exec.Command(dockerBinary, "run", "--add-host=test:192.168.0.1", "-v", "/etc", "busybox", "cat", "/etc/hosts")
@@ -2549,11 +2647,11 @@ func TestRunCreateVolumeEtc(t *testing.T) {
 		t.Fatal("failed to run container: %v, output: %q", err, out)
 	}
 	out = strings.Replace(out, "\n", " ", -1)
-	if !strings.Contains(out, "192.168.0.1"+"\t"+"test") || !strings.Contains(out, "127.0.0.1"+"\t"+"localhost") {
-		t.Fatal("failed: create /etc volume cover /etc/hosts", out)
+	if !strings.Contains(out, "192.168.0.1\ttest") || !strings.Contains(out, "127.0.0.1\tlocalhost") {
+		t.Fatal("/etc volume mount hides /etc/hosts")
 	}
 
-	logDone("run - create /etc volume success")
+	logDone("run - verify /etc volume doesn't hide special bind mounts")
 }
 
 func TestVolumesNoCopyData(t *testing.T) {
@@ -2761,6 +2859,7 @@ func TestRunExposePort(t *testing.T) {
 }
 
 func TestRunUnknownCommand(t *testing.T) {
+	testRequires(t, NativeExecDriver)
 	defer deleteAllContainers()
 	runCmd := exec.Command(dockerBinary, "create", "busybox", "/bin/nada")
 	cID, _, _, err := runCommandWithStdoutStderr(runCmd)
@@ -2788,8 +2887,8 @@ func TestRunUnknownCommand(t *testing.T) {
 }
 
 func TestRunModeIpcHost(t *testing.T) {
-	defer deleteAllContainers()
 	testRequires(t, SameHostDaemon)
+	defer deleteAllContainers()
 
 	hostIpc, err := os.Readlink("/proc/1/ns/ipc")
 	if err != nil {
@@ -2898,8 +2997,8 @@ func TestContainerNetworkMode(t *testing.T) {
 }
 
 func TestRunModePidHost(t *testing.T) {
+	testRequires(t, NativeExecDriver, SameHostDaemon)
 	defer deleteAllContainers()
-	testRequires(t, SameHostDaemon)
 
 	hostPid, err := os.Readlink("/proc/1/ns/pid")
 	if err != nil {
@@ -3044,8 +3143,8 @@ func TestRunNonLocalMacAddress(t *testing.T) {
 
 func TestRunNetHost(t *testing.T) {
 	testRequires(t, SameHostDaemon)
-
 	defer deleteAllContainers()
+
 	hostNet, err := os.Readlink("/proc/1/ns/net")
 	if err != nil {
 		t.Fatal(err)
@@ -3154,7 +3253,9 @@ func TestRunContainerWithWritableRootfs(t *testing.T) {
 }
 
 func TestRunContainerWithReadonlyRootfs(t *testing.T) {
+	testRequires(t, NativeExecDriver)
 	defer deleteAllContainers()
+
 	out, err := exec.Command(dockerBinary, "run", "--read-only", "--rm", "busybox", "touch", "/file").CombinedOutput()
 	if err == nil {
 		t.Fatal("expected container to error on run with read only error")
@@ -3192,4 +3293,65 @@ func TestRunVolumesFromRestartAfterRemoved(t *testing.T) {
 	}
 
 	logDone("run - can restart a volumes-from container after producer is removed")
+}
+
+func TestRunWithAdditionalRegistry(t *testing.T) {
+	reg := setupAndGetRegistryAt(t, privateRegistryURLs[0])
+	defer reg.Close()
+	d := NewDaemon(t)
+	if err := d.StartWithBusybox("--add-registry=" + reg.url); err != nil {
+		t.Fatalf("we should have been able to start the daemon with passing add-registry=%s: %v", reg.url, err)
+	}
+	defer d.Stop()
+
+	busyboxId := d.getAndTestImageEntry(t, 1, reg.url+"/busybox", "").id
+
+	// try to run fully qualified image
+	if out, err := d.Cmd("run", "-t", reg.url+"/busybox", "sh", "-c", "echo foo"); err != nil {
+		t.Fatalf("failed to run %s/busybox image: %v, output: %s", reg.url, err, out)
+	} else if strings.TrimSpace(out) != "foo" {
+		t.Fatalf("got unexpected output: %q", out)
+	}
+
+	// try to run unqualified
+	if out, err := d.Cmd("run", "-t", "busybox", "sh", "-c", "echo foo"); err != nil {
+		t.Fatalf("failed to run busybox image: %v, output: %s", err, out)
+	} else if out != "foo\r\n" {
+		t.Fatalf("got unexpected output: %q", out)
+	}
+
+	// try to run hello world from additional registry
+	if out, err := d.Cmd("run", "-t", reg.url+"/library/hello-world", "sh", "-c", "echo foo"); err == nil {
+		t.Fatalf("running container from image %s/library/hello-world should have failed; output: %s", reg.url, out)
+	}
+
+	// try to run hello-world from official registry
+	if out, err := d.Cmd("run", "-t", "library/hello-world"); err != nil {
+		t.Fatalf("failed to run library/hello-world image: %v, output: %s", err, out)
+	} else if strings.HasSuffix(strings.TrimSpace(out), "foo") {
+		t.Fatalf("got unexpected output")
+	}
+	d.getAndTestImageEntry(t, 2, "docker.io/hello-world", "")
+
+	// push busybox to additional registry as "library/hello-world" and remove all local images
+	if out, err := d.Cmd("tag", reg.url+"/busybox", reg.url+"/library/hello-world"); err != nil {
+		t.Fatalf("failed to tag image %s: error %v, output %q", reg.url+"/busybox", err, out)
+	}
+	if out, err := d.Cmd("push", reg.url+"/library/hello-world"); err != nil {
+		t.Fatalf("failed to push image %s: error %v, output %q", reg.url+"/library/hello-world", err, out)
+	}
+	args := []string{"-f", "busybox", "hello-world", "library/hello-world"}
+	if out, err := d.Cmd("rmi", args...); err != nil {
+		time.Sleep(10000 * time.Minute)
+		t.Fatalf("failed to remove images %v: %v, output: %s", args[1:], err, out)
+	}
+	d.getAndTestImageEntry(t, 0, "", "")
+
+	// now try to run unqualified hello-world again - this time we should pull from additional registry
+	if out, err := d.Cmd("run", "-t", "library/hello-world", "sh", "-c", "echo foo"); err != nil {
+		t.Fatalf("failed to run library/hello-world image: %v, output: %s", err, out)
+	} else if !strings.HasSuffix(strings.TrimSpace(out), "\nfoo") {
+		t.Fatalf("got unexpected output: %q", out)
+	}
+	d.getAndTestImageEntry(t, 1, reg.url+"/library/hello-world", busyboxId)
 }

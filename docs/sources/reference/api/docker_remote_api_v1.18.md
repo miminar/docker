@@ -155,7 +155,8 @@ Create a container
                "CapDrop": ["MKNOD"],
                "RestartPolicy": { "Name": "", "MaximumRetryCount": 0 },
                "NetworkMode": "bridge",
-               "Devices": []
+               "Devices": [],
+               "Ulimits": [{}]
             }
         }
 
@@ -244,6 +245,9 @@ Json Parameters:
   -   **Devices** - A list of devices to add to the container specified in the
         form
         `{ "PathOnHost": "/dev/deviceName", "PathInContainer": "/dev/deviceName", "CgroupPermissions": "mrw"}`
+  -   **Ulimits** - A list of ulimits to be set in the container, specified as
+        `{ "Name": <name>, "Soft": <soft limit>, "Hard": <hard limit> }`, for example:
+        `Ulimits: { "Name": "nofile", "Soft": 1024, "Hard", 2048 }}`
 
 Query Parameters:
 
@@ -337,7 +341,8 @@ Return low-level information on the container `id`
 				"Name": "on-failure"
 			},
 			"SecurityOpt": null,
-			"VolumesFrom": null
+			"VolumesFrom": null,
+			"Ulimits": [{}]
 		},
 		"HostnamePath": "/var/lib/docker/containers/ba033ac4401106a3b513bc9d639eee123ad78ca3616b921167cd74b20e25ed39/hostname",
 		"HostsPath": "/var/lib/docker/containers/ba033ac4401106a3b513bc9d639eee123ad78ca3616b921167cd74b20e25ed39/hosts",
@@ -1073,10 +1078,13 @@ command*](/reference/builder/#dockerbuilder)).
 
 Query Parameters:
 
--   **dockerfile** - path within the build context to the Dockerfile
+-   **dockerfile** - path within the build context to the Dockerfile. This is 
+        ignored if `remote` is specified and points to an individual filename.
 -   **t** – repository name (and optionally a tag) to be applied to
         the resulting image in case of success
--   **remote** – git or HTTP/HTTPS URI build source
+-   **remote** – A Git repository URI or HTTP/HTTPS URI build source. If the 
+        URI specifies a filename, the file's contents are placed into a file 
+		called `Dockerfile`.
 -   **q** – suppress verbose build output
 -   **nocache** – do not use the cache when building the image
 -   **pull** - attempt to pull the image even if an older image exists locally
@@ -1447,6 +1455,9 @@ Display system-wide information
              "IPv4Forwarding":true,
              "Labels":["storage=ssd"],
              "DockerRootDir": "/var/lib/docker",
+             "HttpProxy": "http://test:test@localhost:8080"
+             "HttpsProxy": "https://test:test@localhost:8080"
+             "NoProxy": "9.81.1.160"
              "OperatingSystem": "Boot2Docker",
         }
 
@@ -1975,7 +1986,8 @@ This might change in the future.
 
 ## 3.3 CORS Requests
 
-To enable cross origin requests to the remote api add the flag
-"--api-enable-cors" when running docker in daemon mode.
+To set cross origin requests to the remote api please give values to 
+"--api-cors-header" when running docker in daemon mode. Set * will allow all,
+default or blank means CORS disabled
 
-    $ docker -d -H="192.168.1.9:2375" --api-enable-cors
+    $ docker -d -H="192.168.1.9:2375" --api-cors-header="http://foo.bar"
