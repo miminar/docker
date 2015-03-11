@@ -142,8 +142,6 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 	var (
 		metaHeaders = map[string][]string{}
 		authConfig  = &AuthConfig{}
-		registryName string
-		resultName string
 	)
 	job.GetenvJson("authConfig", authConfig)
 	job.GetenvJson("metaHeaders", metaHeaders)
@@ -168,11 +166,9 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 		out := &engine.Env{}
 		// Check if search result has is fully qualified with registry
 		// If not, assume REGISTRY = INDEX
-		if RepositoryNameHasIndex(result.Name) {		
-			registryName, resultName = splitReposName(result.Name, false)
-			result.Name = resultName
-		} else {
-			registryName = repoInfo.Index.Name
+		registryName := repoInfo.Index.Name
+		if RepositoryNameHasIndex(result.Name) {
+			registryName, result.Name = splitReposName(result.Name, false)
 		}
 		out.Import(result)
 		// Now add the index in which we found the result to the json. (not sure this is really the right place for this)
