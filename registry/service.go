@@ -85,9 +85,38 @@ func (s *Service) Auth(job *engine.Job) engine.Status {
 
 
 // Compare two items in the result table of search command.
-// First compare the index name name. Second compare their rating. Then compare their name.
+// First compare the index we found the result in. Second compare their rating. Then compare their fully qualified name (registry/name).
 func cmpSearchResults(fst, snd *engine.Env) int {
-	// First compare registries. If they are different, we know it's different repositories
+
+	indA := fst.Get("index_name")
+	indB := snd.Get("index_name")
+        switch {
+                case indA < indB:
+                        return -1
+                case indA > indB:
+                        return 1
+        }
+
+	starsA := fst.Get("star_count")
+	starsB := snd.Get("star_count")
+
+	intA, errA := strconv.ParseInt(starsA, 10, 64)
+	intB, errB := strconv.ParseInt(starsB, 10, 64)
+	if errA == nil && errB == nil {
+		switch {
+		case intA > intB:
+			return -1
+		case intA < intB:
+			return 1
+		}
+	}
+	switch {
+		case starsA > starsB:
+			return -1
+		case starsA < starsB:
+			return 1
+	}
+
 	regA := fst.Get("registry_name")
 	regB := snd.Get("registry_name")
 	switch {
@@ -97,36 +126,6 @@ func cmpSearchResults(fst, snd *engine.Env) int {
 			return 1
 	}
 
-	// If the indices in which we found the image differ, but the fully qualified names are identical, 
-        // we don't compare stars, because they might be out of sync leading to dupes (e.g. in the case RH listing ISV content).
-	// BTW: Does comparing stars make any sense whatshowever? How can that even be different for identical names?
-
-	indA  := fst.Get("index_name")
-	indB  := snd.Get("index_name")
-
-	if indA == indB {
-		starsA := fst.Get("star_count")
-		starsB := snd.Get("star_count")
-
-		intA, errA := strconv.ParseInt(starsA, 10, 64)
-		intB, errB := strconv.ParseInt(starsB, 10, 64)
-		if errA == nil && errB == nil {
-			switch {
-			case intA > intB:
-				return -1
-			case intA < intB:
-				return 1
-			}
-		}
-		switch {
-			case starsA > starsB:
-				return -1
-			case starsA < starsB:
-				return 1
-		}
-	}
-
-	// Now comparing the names - this is what really matters.
 	nameA := fst.Get("name")
 	nameB := snd.Get("name")
 	switch {
