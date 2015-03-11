@@ -2032,7 +2032,7 @@ func (cli *DockerCli) CmdSearch(args ...string) error {
 		if ((*automated || *trusted) && (!out.GetBool("is_trusted") && !out.GetBool("is_automated"))) || (*stars > out.GetInt("star_count")) {
 			continue
 		}
-		indexName := out.Get("indexName")
+		indexName := out.Get("index_name")
 		if !*noTrunc {
 	                // Shorten index name to DOMAIN.TLD unless --no-trunc is given. 
         	        if host, _, err := net.SplitHostPort(indexName); err == nil { 
@@ -2054,9 +2054,9 @@ func (cli *DockerCli) CmdSearch(args ...string) error {
 			desc = utils.Trunc(desc, 42) + "..."
 		}
 		if !*noIndex {
-			fmt.Fprintf(w, "%s:\t%s/%s\t%s\t%d\t", indexName, out.Get("registryName"),out.Get("name"), desc, out.GetInt("star_count"))
+			fmt.Fprintf(w, "%s:\t%s/%s\t%s\t%d\t", indexName, out.Get("registry_name"),out.Get("name"), desc, out.GetInt("star_count"))
 		} else {
-			fmt.Fprintf(w, "%s/%s\t%s\t%d\t", out.Get("registryName"),out.Get("name"), desc, out.GetInt("star_count"))
+			fmt.Fprintf(w, "%s/%s\t%s\t%d\t", out.Get("registry_name"),out.Get("name"), desc, out.GetInt("star_count"))
 		}
 		if out.GetBool("is_official") {
 			fmt.Fprint(w, "[OK]")

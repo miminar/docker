@@ -177,8 +177,8 @@ func searchTerm(job *engine.Job, outs *engine.Table, term string) error {
 		}
 		out.Import(result)
 		// Now add the index in which we found the result to the json. (not sure this is really the right place for this)
-		out.Set("registryName",registryName)
-		out.Set("indexName",repoInfo.Index.Name)
+		out.Set("registry_name",registryName)
+		out.Set("index_name",repoInfo.Index.Name)
 		outs.Add(out)
 	}
 	return nil
